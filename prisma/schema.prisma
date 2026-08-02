@@ -1,0 +1,411 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// AUTH & RBAC
+// ============================================================
+
+enum StaffRole {
+  SUPER_ADMIN     // full access, including financial data
+  SUPPORT_ADMIN   // operational access only — financials hidden
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          StaffRole @default(SUPPORT_ADMIN)
+  isActive      Boolean   @default(true)
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+  activityLogs  ActivityLog[]
+  assignedEnquiries  Enquiry[]   @relation("EnquiryAssignee")
+  assignedComplaints Complaint[] @relation("ComplaintAssignee")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+// Required by @auth/prisma-adapter even though we primarily use Credentials login
+// (keeps the door open for OAuth staff login later without a schema change)
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  systemSource String? // e.g. "paystack_webhook", "stock_reservation_cron" — set when userId is null
+  action     String   // e.g. "PRODUCT_CREATE", "ORDER_STATUS_UPDATE"
+  resource   String   // e.g. "Product:cuid123"
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([resource])
+}
+
+// ============================================================
+// PRODUCTS
+// ============================================================
+
+enum ProductStatus {
+  DRAFT     // being prepared, never visible on the public API
+  ACTIVE    // publicly visible, purchasable
+  ARCHIVED  // hidden from public API, preserved for order history
+  // Explicit lifecycle: DRAFT -> ACTIVE -> ARCHIVED, with ARCHIVED able to
+  // return to ACTIVE or DRAFT (undo). Enforced in code by
+  // lib/utils/product-lifecycle.ts — not just accepted as any free value.
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String
+  slug        String     @unique
+  description String?
+  image       String?
+  parentId    String?
+  parent      Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  children    Category[] @relation("CategoryHierarchy")
+  isActive    Boolean    @default(true)
+  sortOrder   Int        @default(0)
+  products    Product[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Product {
+  id             String   @id @default(cuid())
+  slug           String   @unique
+  name           String
+  shortDesc      String
+  fullDesc       String   @db.Text
+  categoryId     String
+  category       Category @relation(fields: [categoryId], references: [id])
+  brand          String   @default("Giftij Brandy")
+  sku            String   @unique
+  barcode        String?
+
+  // Financial fields — SUPER_ADMIN only at the API layer (see lib/permissions.ts)
+  price          Decimal  @db.Decimal(12, 2)
+  costPrice      Decimal  @db.Decimal(12, 2)
+  // Percentage discount model for MVP. If flat-amount or tiered/scheduled
+  // discounts are needed later, introduce a `discountType` enum
+  // ("PERCENTAGE" | "FLAT_AMOUNT" | ...) alongside this field rather than
+  // repurposing it — documented here so the future expansion path is clear.
+  discount       Decimal? @db.Decimal(5, 2) @default(0)
+
+  currency       String   @default("NGN")
+  weight         Float?
+  dimensions     String?
+  warranty       String?
+  seoTitle       String?
+  seoDescription String?
+  status         ProductStatus @default(DRAFT)
+  tags           String[]
+  // MVP collections model — see lib/collections/featured-flags-provider.ts.
+  // Every read of "which products are in collection X" goes through that
+  // provider, not a direct `featuredFlags` query, so this can be replaced
+  // by a proper Collection model later without changing API consumers.
+  featuredFlags  String[] // ["hero","best_sellers","new_arrivals","trending","luxury_collection","recommended","limited_edition","recently_added"]
+
+  images         ProductImage[]
+  variants       ProductVariant[]
+  specs          ProductSpec[]
+  inventory      Inventory?
+  orderItems     OrderItem[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([categoryId])
+  @@index([status])
+}
+
+enum ImageType {
+  COVER    // primary product image, shown first in grids/cards
+  GALLERY  // additional product photos
+  VARIANT  // attached to a specific ProductVariant, not the base product
+}
+
+model ProductImage {
+  id         String   @id @default(cuid())
+  productId  String?
+  product    Product? @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variantId  String?
+  variant    ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  url        String
+  cloudinaryId String
+  altText    String?
+  width      Int?
+  height     Int?
+  format     String?    // e.g. "webp" — captured from Cloudinary's upload response
+  imageType  ImageType  @default(GALLERY)
+  sortOrder  Int      @default(0)
+}
+
+model ProductSpec {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  label     String
+  value     String
+}
+
+model ProductVariant {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  color     String?
+  size      String?
+  material  String?
+  pattern   String?
+  sku       String  @unique
+  price     Decimal? @db.Decimal(12, 2)
+  stock     Int      @default(0)
+  status    ProductStatus @default(ACTIVE)
+  images    ProductImage[]
+}
+
+// ============================================================
+// INVENTORY
+// ============================================================
+
+model Inventory {
+  id                String  @id @default(cuid())
+  productId         String  @unique
+  product           Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  currentStock      Int     @default(0)
+  reservedStock     Int     @default(0)
+  soldStock         Int     @default(0)
+  damagedStock      Int     @default(0)
+  returnedStock     Int     @default(0)
+  warehouseLocation String?
+  lowStockThreshold Int     @default(5)
+  history           InventoryLog[]
+  updatedAt         DateTime @updatedAt
+}
+
+model InventoryLog {
+  id          String    @id @default(cuid())
+  inventoryId String
+  inventory   Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  changeType  String    // "INCREASE" | "DECREASE" | "ADJUST" | "SALE" | "RETURN" | "DAMAGE"
+  quantity    Int
+  reason      String?
+  performedBy String?
+  createdAt   DateTime  @default(now())
+}
+
+// ============================================================
+// ORDERS
+// ============================================================
+
+enum OrderStatus {
+  PENDING
+  PAID
+  PROCESSING
+  PACKED
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  RETURNED
+  REFUNDED
+}
+
+model Order {
+  id             String      @id @default(cuid())
+  orderNumber    String      @unique
+  customerId     String
+  customer       Customer    @relation(fields: [customerId], references: [id])
+  items          OrderItem[]
+  status         OrderStatus @default(PENDING)
+  shippingAddress Json
+  paymentReference String?
+  trackingNumber String?
+
+  subtotal       Decimal     @db.Decimal(12, 2)
+  // profit is derived (subtotal - cost basis) — SUPER_ADMIN only field
+  profit         Decimal?    @db.Decimal(12, 2)
+
+  notes          OrderNote[]
+  timeline       OrderEvent[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([status])
+  @@index([customerId])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  variantSku String?
+  quantity  Int
+  unitPrice Decimal @db.Decimal(12, 2)
+}
+
+model OrderNote {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  note      String
+  createdBy String
+  createdAt DateTime @default(now())
+}
+
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  label     String   // "Order Placed", "Payment Confirmed", "Shipped"...
+  createdAt DateTime @default(now())
+}
+
+// ============================================================
+// CUSTOMERS
+// ============================================================
+
+model Customer {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  phone         String?
+  address       Json?
+  country       String?
+  orders        Order[]
+  lifetimeValue Decimal   @default(0) @db.Decimal(12, 2)
+  lastPurchase  DateTime?
+  internalNotes String?   @db.Text
+  subscribed    Boolean   @default(false)
+  enquiries     Enquiry[]
+  complaints    Complaint[]
+  timeline      CustomerEvent[]
+  createdAt     DateTime  @default(now())
+}
+
+model CustomerEvent {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  label      String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+}
+
+// ============================================================
+// COMMUNICATIONS / CRM
+// ============================================================
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model Enquiry {
+  id           String       @id @default(cuid())
+  ticketNumber String       @unique
+  customerId   String
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  subject      String
+  message      String       @db.Text
+  status       TicketStatus @default(OPEN)
+  assignedToId String?
+  assignedTo   User?        @relation("EnquiryAssignee", fields: [assignedToId], references: [id])
+  replies      Reply[]
+  createdAt    DateTime     @default(now())
+}
+
+model Complaint {
+  id           String       @id @default(cuid())
+  ticketNumber String       @unique
+  customerId   String
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  subject      String
+  message      String       @db.Text
+  status       TicketStatus @default(OPEN)
+  assignedToId String?
+  assignedTo   User?        @relation("ComplaintAssignee", fields: [assignedToId], references: [id])
+  replies      Reply[]
+  createdAt    DateTime     @default(now())
+}
+
+model Reply {
+  id           String     @id @default(cuid())
+  enquiryId    String?
+  enquiry      Enquiry?   @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  complaintId  String?
+  complaint    Complaint? @relation(fields: [complaintId], references: [id], onDelete: Cascade)
+  message      String     @db.Text
+  sentByStaff  Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+}
+
+// ============================================================
+// CAMPAIGNS
+// ============================================================
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+}
+
+model Campaign {
+  id            String         @id @default(cuid())
+  subject       String
+  previewText   String?
+  bodyHtml      String         @db.Text
+  recipientRule Json
+  status        CampaignStatus @default(DRAFT)
+  scheduledFor  DateTime?
+  sentAt        DateTime?
+  stats         Json?
+  createdAt     DateTime       @default(now())
+}
