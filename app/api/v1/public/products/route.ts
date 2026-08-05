@@ -48,7 +48,7 @@ const getCachedProductList = unstable_cache(
             ],
           }
         : {}),
-      ...(query.category ? { category: { slug: query.category } } : {}),
+      ...(query.category ? { categories: { some: { slug: query.category } } } : {}),
       ...(query.featured
         ? featuredFlagsProvider.whereClauseForFlag(query.featured as Parameters<typeof featuredFlagsProvider.whereClauseForFlag>[0])
         : {}),

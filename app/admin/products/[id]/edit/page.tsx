@@ -14,7 +14,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
     slug: string;
     shortDesc: string;
     fullDesc: string;
-    categoryId: string;
+    categories: { id: string; name: string; slug: string }[];
     brand: string;
     sku: string;
     barcode: string | null;
@@ -30,8 +30,9 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
     status: "DRAFT" | "ACTIVE" | "ARCHIVED";
     tags: string[];
     featuredFlags: string[];
+    variantType: string | null;
     specs: { id: string; label: string; value: string }[];
-    variants: { id: string; color: string | null; size: string | null; material: string | null; pattern: string | null; sku: string; price: number | null; stock: number; status: string }[];
+    variants: { id: string; value: string; sku: string; currentStock: number; status: string }[];
     images: { id: string; url: string; sortOrder: number }[];
   };
 
@@ -40,7 +41,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
     slug: product.slug,
     shortDesc: product.shortDesc,
     fullDesc: product.fullDesc,
-    categoryId: product.categoryId,
+    categoryIds: product.categories.map((c) => c.id),
     brand: product.brand,
     sku: product.sku,
     barcode: product.barcode,
@@ -57,7 +58,15 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
     tags: product.tags,
     featuredFlags: product.featuredFlags as ProductInput["featuredFlags"],
     specs: product.specs,
-    variants: product.variants.map((v) => ({ ...v, status: v.status as "DRAFT" | "ACTIVE" | "ARCHIVED" })),
+    hasVariants: product.variants.length > 0,
+    variantType: product.variantType,
+    variants: product.variants.map((v) => ({
+      id: v.id,
+      value: v.value,
+      sku: v.sku,
+      stock: v.currentStock,
+      status: v.status as "DRAFT" | "ACTIVE" | "ARCHIVED",
+    })),
   };
 
   return (

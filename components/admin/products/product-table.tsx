@@ -14,11 +14,12 @@ type ProductRow = {
   id: string;
   name: string;
   sku: string;
-  category: { id: string; name: string; slug: string } | null;
+  categories: { id: string; name: string; slug: string }[];
   status: string;
   price: number | null;
   images: { url: string }[];
   inventory: { currentStock: number; lowStockThreshold: number } | null;
+  variants: { id: string; currentStock: number; lowStockThreshold: number }[];
 };
 
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
@@ -193,7 +194,13 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
               </tr>
             ) : (
               rows.map((p) => {
-                const lowStock = p.inventory && p.inventory.currentStock <= p.inventory.lowStockThreshold;
+                const totalStock = p.inventory
+                  ? p.inventory.currentStock
+                  : p.variants.reduce((sum, v) => sum + v.currentStock, 0);
+                const lowStock = p.inventory
+                  ? p.inventory.currentStock <= p.inventory.lowStockThreshold
+                  : p.variants.some((v) => v.currentStock <= v.lowStockThreshold);
+                const hasVariants = p.variants.length > 0;
                 return (
                   <tr key={p.id} className="border-t border-cream">
                     <td className="px-4 py-3">
@@ -220,14 +227,16 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                       </Link>
                     </td>
                     <td className="px-4 py-3 text-ink/60">{p.sku}</td>
-                    <td className="px-4 py-3 text-ink/60">{p.category?.name ?? "—"}</td>
+                    <td className="px-4 py-3 text-ink/60">
+                      {p.categories.length > 0 ? p.categories.map((c) => c.name).join(", ") : "—"}
+                    </td>
                     <td className="px-4 py-3">
                       {p.price !== null && p.price !== undefined ? `₦${p.price.toLocaleString()}` : "—"}
                     </td>
                     <td className="px-4 py-3">
-                      {p.inventory ? (
+                      {p.inventory || hasVariants ? (
                         <Badge
-                          label={`${p.inventory.currentStock} in stock`}
+                          label={hasVariants ? `${totalStock} across ${p.variants.length} variants` : `${totalStock} in stock`}
                           tone={lowStock ? "LOW_STOCK" : "ACTIVE"}
                         />
                       ) : (

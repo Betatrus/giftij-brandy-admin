@@ -1,0 +1,273 @@
+openapi: 3.1.0
+info:
+  title: Giftij Brandy Public API
+  version: "1.0.0"
+  description: >
+    Public, read-only storefront API for Giftij Brandy. Consumed by www.giftij.com.
+    This spec covers Milestone 3 scope (product catalog reads). Checkout/order
+    endpoints are added in Milestone 4 to this same file.
+  contact:
+    name: Giftij Brandy Engineering
+
+servers:
+  - url: https://api.giftij.com/api/v1/public
+    description: Production
+  - url: http://localhost:3000/api/v1/public
+    description: Local development
+
+tags:
+  - name: Products
+  - name: Categories
+
+paths:
+  /products:
+    get:
+      tags: [Products]
+      summary: List products
+      description: >
+        Paginated, filterable product listing. Only ACTIVE products are returned.
+        The `q` parameter searches name, SKU, short description, and tags.
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 100 }
+          description: Free-text search against product name and SKU
+        - name: category
+          in: query
+          schema: { type: string }
+          description: Category slug
+        - name: featured
+          in: query
+          schema:
+            type: string
+            enum: [hero, best_sellers, fan_favorites, new_arrivals, trending, luxury_collection, recommended, limited_edition, recently_added]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [newest, price_asc, price_desc, name_asc]
+            default: newest
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+      responses:
+        "200":
+          description: Product list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/ProductSummary" }
+                      meta: { $ref: "#/components/schemas/PaginationMeta" }
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+        "429":
+          description: Rate limited
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /products/{slug}:
+    get:
+      tags: [Products]
+      summary: Get a single product by slug
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Product detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/ProductDetail" }
+        "404":
+          description: Product not found (or not publicly visible)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorEnvelope" }
+
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List active categories
+      parameters:
+        - name: flat
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Category list (nested by default)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Category" }
+
+components:
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, enum: [true] }
+
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [VALIDATION_ERROR, NOT_FOUND, RATE_LIMITED, INTERNAL_ERROR]
+            message: { type: string }
+            details: { type: object }
+
+    PaginationMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer }
+        pageCount: { type: integer }
+
+    CategoryRef:
+      type: object
+      properties:
+        name: { type: string }
+        slug: { type: string }
+
+    Category:
+      type: object
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        image: { type: string, nullable: true }
+        productCount:
+          type: integer
+          description: Count of ACTIVE products in this category (computed, not stored)
+        children:
+          type: array
+          items: { $ref: "#/components/schemas/Category" }
+
+    ProductSummary:
+      type: object
+      description: >
+        Note: this schema intentionally has no `badge` or `oldPrice` field — those are
+        storefront-adapter-derived display concerns, not part of the data contract.
+        See API_CONTRACT.md "Admin-Managed Featured Collections & Badge Derivation"
+        and "Discount Semantics".
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        shortDesc: { type: string }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryRef" }
+        price: { type: number }
+        discount: { type: number, nullable: true }
+        currency: { type: string, example: "NGN" }
+        coverImage: { type: string, nullable: true }
+        images:
+          type: array
+          items: { type: string }
+        featuredFlags:
+          type: array
+          items: { type: string }
+        inStock: { type: boolean }
+        hasVariants: { type: boolean }
+
+    ProductImage:
+      type: object
+      properties:
+        url: { type: string }
+        altText: { type: string, nullable: true }
+        width: { type: integer, nullable: true }
+        height: { type: integer, nullable: true }
+        format: { type: string, nullable: true, example: "webp" }
+        sortOrder: { type: integer }
+
+    ProductSpec:
+      type: object
+      properties:
+        label: { type: string }
+        value: { type: string }
+
+    ProductVariant:
+      type: object
+      description: >
+        No price field — every variant shares the parent product's price.
+        `value`'s meaning is given by the parent ProductDetail's `variantType`.
+      properties:
+        sku: { type: string }
+        value: { type: string }
+        inStock: { type: boolean }
+        image: { type: string, nullable: true }
+
+    ProductDetail:
+      type: object
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+        shortDesc: { type: string }
+        fullDesc: { type: string }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryRef" }
+        brand: { type: string }
+        price: { type: number }
+        discount: { type: number, nullable: true }
+        currency: { type: string }
+        weight: { type: number, nullable: true }
+        dimensions: { type: string, nullable: true }
+        warranty: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        featuredFlags:
+          type: array
+          items: { type: string }
+        images:
+          type: array
+          items: { $ref: "#/components/schemas/ProductImage" }
+        specs:
+          type: array
+          items: { $ref: "#/components/schemas/ProductSpec" }
+        variantType:
+          type: string
+          nullable: true
+          description: 'What variants[].value means for this product, e.g. "Colour", "Size", or an admin-defined custom label. Null when the product has no variants.'
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/ProductVariant" }
+        inStock: { type: boolean }
+        seoTitle: { type: string, nullable: true }
+        seoDescription: { type: string, nullable: true }

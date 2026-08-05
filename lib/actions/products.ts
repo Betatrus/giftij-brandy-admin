@@ -49,7 +49,7 @@ export async function createProduct(input: ProductInput) {
       slug,
       shortDesc: parsed.shortDesc,
       fullDesc: parsed.fullDesc,
-      categoryId: parsed.categoryId,
+      categories: { connect: parsed.categoryIds.map((id) => ({ id })) },
       brand: parsed.brand,
       sku: parsed.sku,
       barcode: parsed.barcode ?? null,
@@ -66,25 +66,28 @@ export async function createProduct(input: ProductInput) {
       tags: parsed.tags,
       featuredFlags: parsed.featuredFlags,
       specs: { create: parsed.specs.map((s) => ({ label: s.label, value: s.value })) },
-      variants: {
-        create: parsed.variants.map((v) => ({
-          color: v.color ?? null,
-          size: v.size ?? null,
-          material: v.material ?? null,
-          pattern: v.pattern ?? null,
-          sku: v.sku,
-          price: v.price ?? null,
-          stock: v.stock,
-          status: v.status,
-        })),
-      },
-      inventory: {
-        create: {
-          currentStock: parsed.initialStock,
-        },
-      },
+      // Admin-defined variant type — a plain string, whatever the admin
+      // picked (a preset like "Colour"/"Size" or a custom "Other" value).
+      variantType: parsed.hasVariants ? parsed.variantType : null,
+      variants: parsed.hasVariants
+        ? {
+            create: parsed.variants.map((v) => ({
+              value: v.value,
+              sku: v.sku,
+              currentStock: v.stock,
+              status: v.status,
+            })),
+          }
+        : undefined,
+      // Base Inventory only created when the product has NO variants —
+      // when it does, each variant tracks its own stock instead (see
+      // ProductVariant.currentStock and lib/actions/inventory.ts's
+      // adjustVariantStock).
+      inventory: parsed.hasVariants
+        ? undefined
+        : { create: { currentStock: parsed.initialStock } },
     },
-    include: { specs: true, variants: true, inventory: true, category: true },
+    include: { specs: true, variants: true, inventory: true, categories: true },
   });
 
   await logActivity({
@@ -127,9 +130,22 @@ export async function updateProduct(id: string, input: ProductInput) {
     throw new Error(`Slug "${slug}" is already in use by another product.`);
   }
 
-  // Replace specs wholesale — simplest correct approach for a small,
-  // admin-curated list. Existing variants are matched by id; new ones
-  // (no id) are created, removed ones are deleted.
+  // Removing a variant — whether one row at a time or by turning off
+  // "Has Variants" entirely — ARCHIVES it rather than deleting it.
+  // Deleting the row would cascade-delete its VariantInventoryLog audit
+  // trail, and would SetNull any historical OrderItem.variantId that
+  // referenced it — silently losing which variant was actually ordered
+  // on a past sale. Archiving preserves both. Archived variants are
+  // excluded from the edit form, the Inventory page, and the public API
+  // (see the `status: { not: "ARCHIVED" }` filters in getProduct,
+  // listInventory, and the public product selects) — so from the
+  // admin's point of view it looks and behaves like a deletion; the data
+  // just isn't actually gone.
+  const existingVariantCount = await prisma.productVariant.count({
+    where: { productId: id, status: { not: "ARCHIVED" } },
+  });
+  const willArchiveAllVariants = existingVariantCount > 0 && !parsed.hasVariants;
+
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.product.update({
       where: { id },
@@ -138,7 +154,7 @@ export async function updateProduct(id: string, input: ProductInput) {
         slug,
         shortDesc: parsed.shortDesc,
         fullDesc: parsed.fullDesc,
-        categoryId: parsed.categoryId,
+        categories: { set: parsed.categoryIds.map((catId) => ({ id: catId })) },
         brand: parsed.brand,
         sku: parsed.sku,
         barcode: parsed.barcode ?? null,
@@ -154,14 +170,12 @@ export async function updateProduct(id: string, input: ProductInput) {
         status: parsed.status,
         tags: parsed.tags,
         featuredFlags: parsed.featuredFlags,
+        variantType: parsed.hasVariants ? parsed.variantType : null,
       },
     });
 
-    // Specs: same ID-preserving diff strategy as variants below — update
-    // existing rows in place (matched by id), create new ones (no id),
-    // delete ones that were removed. Previously this deleted and
-    // recreated every spec on every save, churning row IDs for no
-    // reason; fixed to match the variant pattern.
+    // Specs: ID-preserving diff — update existing rows in place (matched
+    // by id), create new ones (no id), delete ones that were removed.
     const existingSpecs: ProductSpec[] = await tx.productSpec.findMany({ where: { productId: id } });
     const keepSpecIds = parsed.specs.filter((s) => s.id).map((s) => s.id as string);
     const specsToDelete = existingSpecs.filter((s: ProductSpec) => !keepSpecIds.includes(s.id));
@@ -176,45 +190,68 @@ export async function updateProduct(id: string, input: ProductInput) {
       }
     }
 
-    const existingVariants: ProductVariant[] = await tx.productVariant.findMany({ where: { productId: id } });
-    const keepIds = parsed.variants.filter((v) => v.id).map((v) => v.id as string);
-    const toDelete = existingVariants.filter((v: ProductVariant) => !keepIds.includes(v.id));
-    if (toDelete.length) {
-      await tx.productVariant.deleteMany({ where: { id: { in: toDelete.map((v: ProductVariant) => v.id) } } });
-    }
+    if (parsed.hasVariants) {
+      const existingVariants: ProductVariant[] = await tx.productVariant.findMany({
+        where: { productId: id, status: { not: "ARCHIVED" } },
+      });
+      const keepIds = parsed.variants.filter((v) => v.id).map((v) => v.id as string);
+      const toArchive = existingVariants.filter((v: ProductVariant) => !keepIds.includes(v.id));
+      if (toArchive.length) {
+        await tx.productVariant.updateMany({
+          where: { id: { in: toArchive.map((v: ProductVariant) => v.id) } },
+          data: { status: "ARCHIVED" },
+        });
+      }
 
-    for (const v of parsed.variants) {
-      if (v.id) {
-        await tx.productVariant.update({
-          where: { id: v.id },
-          data: {
-            color: v.color ?? null,
-            size: v.size ?? null,
-            material: v.material ?? null,
-            pattern: v.pattern ?? null,
-            sku: v.sku,
-            price: v.price ?? null,
-            stock: v.stock,
-            status: v.status,
-          },
-        });
-      } else {
-        await tx.productVariant.create({
-          data: {
-            productId: id,
-            color: v.color ?? null,
-            size: v.size ?? null,
-            material: v.material ?? null,
-            pattern: v.pattern ?? null,
-            sku: v.sku,
-            price: v.price ?? null,
-            stock: v.stock,
-            status: v.status,
-          },
-        });
+      for (const v of parsed.variants) {
+        if (v.id) {
+          // Deliberately NOT touching currentStock/reservedStock/etc.
+          // here — stock changes go through adjustVariantStock only, so
+          // there's always exactly one code path that mutates stock and
+          // always writes a VariantInventoryLog entry. Editing the
+          // product form should never silently change stock levels.
+          await tx.productVariant.update({
+            where: { id: v.id },
+            data: { value: v.value, sku: v.sku, status: v.status },
+          });
+        } else {
+          await tx.productVariant.create({
+            data: {
+              productId: id,
+              value: v.value,
+              sku: v.sku,
+              currentStock: v.stock,
+              status: v.status,
+            },
+          });
+        }
+      }
+    } else if (willArchiveAllVariants) {
+      await tx.productVariant.updateMany({
+        where: { productId: id, status: { not: "ARCHIVED" } },
+        data: { status: "ARCHIVED" },
+      });
+
+      // Without this, the product would end up with NO active stock
+      // record at all — no non-archived variants and no base Inventory
+      // row (updateProduct never creates one; only createProduct does).
+      // The admin can adjust this to the real count via the Inventory
+      // page immediately after saving.
+      const hasBaseInventory = await tx.inventory.findUnique({ where: { productId: id } });
+      if (!hasBaseInventory) {
+        await tx.inventory.create({ data: { productId: id, currentStock: 0 } });
       }
     }
   });
+
+  if (willArchiveAllVariants) {
+    await logActivity({
+      userId: session.user.id,
+      action: "PRODUCT_VARIANTS_ARCHIVED",
+      resource: `Product:${id}`,
+      metadata: { variantCount: existingVariantCount, reason: "Admin turned off 'Has Variants'; variants archived, not deleted — inventory history preserved" },
+    });
+  }
 
   await logActivity({
     userId: session.user.id,
@@ -304,7 +341,8 @@ export async function listProducts(params: {
           ],
         }
       : {}),
-    ...(params.categoryId ? { categoryId: params.categoryId } : {}),
+    // Many-to-many: "products where at least one of their categories is this one"
+    ...(params.categoryId ? { categories: { some: { id: params.categoryId } } } : {}),
     ...(params.status ? { status: params.status } : {}),
   };
 
@@ -316,8 +354,12 @@ export async function listProducts(params: {
       orderBy: { [params.sortBy ?? "createdAt"]: params.sortDir ?? "desc" },
       include: {
         inventory: true,
+        variants: {
+          where: { status: { not: "ARCHIVED" } },
+          select: { id: true, currentStock: true, lowStockThreshold: true },
+        },
         images: { orderBy: { sortOrder: "asc" }, take: 1 },
-        category: { select: { id: true, name: true, slug: true } },
+        categories: { select: { id: true, name: true, slug: true } },
       },
     }),
     prisma.product.count({ where }),
@@ -344,10 +386,10 @@ export async function getProduct(id: string) {
     where: { id },
     include: {
       specs: true,
-      variants: true,
+      variants: { where: { status: { not: "ARCHIVED" } }, include: { image: true } },
       images: { orderBy: { sortOrder: "asc" } },
       inventory: true,
-      category: { select: { id: true, name: true, slug: true } },
+      categories: { select: { id: true, name: true, slug: true } },
     },
   });
 
@@ -384,5 +426,4 @@ export async function toggleFeaturedFlag(productId: string, flag: string, enable
   revalidateTag("products");
 }
 
-// Category listing moved to lib/actions/categories.ts (listCategoriesFlat) —
-// category is now a real relation, not a distinct-string query on Product.
+// Category listing lives in lib/actions/categories.ts (listCategoriesFlat).

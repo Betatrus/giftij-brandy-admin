@@ -16,13 +16,13 @@ export const PUBLIC_PRODUCT_SUMMARY_SELECT = {
   discount: true,
   currency: true,
   featuredFlags: true,
-  category: { select: { name: true, slug: true } },
+  categories: { select: { name: true, slug: true } },
   images: {
     select: { url: true, imageType: true },
     orderBy: { sortOrder: "asc" as const },
   },
   inventory: { select: { currentStock: true } },
-  variants: { select: { id: true, stock: true } },
+  variants: { select: { id: true, currentStock: true } },
 } satisfies Prisma.ProductSelect;
 
 export const PUBLIC_PRODUCT_DETAIL_SELECT = {
@@ -42,7 +42,8 @@ export const PUBLIC_PRODUCT_DETAIL_SELECT = {
   featuredFlags: true,
   seoTitle: true,
   seoDescription: true,
-  category: { select: { name: true, slug: true } },
+  variantType: true,
+  categories: { select: { name: true, slug: true } },
   images: {
     select: { url: true, altText: true, width: true, height: true, format: true, sortOrder: true },
     orderBy: { sortOrder: "asc" as const },
@@ -50,14 +51,12 @@ export const PUBLIC_PRODUCT_DETAIL_SELECT = {
   specs: { select: { label: true, value: true } },
   variants: {
     select: {
+      id: true,
       sku: true,
-      color: true,
-      size: true,
-      material: true,
-      pattern: true,
-      price: true,
-      stock: true,
-      images: { select: { url: true } },
+      value: true,
+      currentStock: true,
+      status: true,
+      image: { select: { url: true, altText: true } },
     },
   },
   inventory: { select: { currentStock: true } },
@@ -78,10 +77,10 @@ interface ProductSummaryRowShape {
   discount: unknown;
   currency: string;
   featuredFlags: string[];
-  category: { name: string; slug: string };
+  categories: { name: string; slug: string }[];
   images: { url: string; imageType: string }[];
   inventory: { currentStock: number } | null;
-  variants: { id: string; stock: number }[];
+  variants: { id: string; currentStock: number }[];
 }
 
 interface ProductDetailRowShape {
@@ -101,18 +100,17 @@ interface ProductDetailRowShape {
   featuredFlags: string[];
   seoTitle: string | null;
   seoDescription: string | null;
-  category: { name: string; slug: string };
+  variantType: string | null;
+  categories: { name: string; slug: string }[];
   images: { url: string; altText: string | null; width: number | null; height: number | null; format: string | null; sortOrder: number }[];
   specs: { label: string; value: string }[];
   variants: {
+    id: string;
     sku: string;
-    color: string | null;
-    size: string | null;
-    material: string | null;
-    pattern: string | null;
-    price: unknown;
-    stock: number;
-    images: { url: string }[];
+    value: string;
+    currentStock: number;
+    status: string;
+    image: { url: string; altText: string | null } | null;
   }[];
   inventory: { currentStock: number } | null;
 }
@@ -125,14 +123,14 @@ function toNumber(value: unknown): number {
 export function toProductSummaryDTO(row: ProductSummaryRowShape) {
   const cover = row.images.find((i) => i.imageType === "COVER") ?? row.images[0];
   const baseStock = row.inventory?.currentStock ?? 0;
-  const variantStock = row.variants.reduce((sum, v) => sum + v.stock, 0);
+  const variantStock = row.variants.reduce((sum, v) => sum + v.currentStock, 0);
 
   return {
     id: row.id,
     slug: row.slug,
     name: row.name,
     shortDesc: row.shortDesc,
-    category: row.category,
+    categories: row.categories,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
     currency: row.currency,
@@ -146,7 +144,7 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
 
 export function toProductDetailDTO(row: ProductDetailRowShape) {
   const baseStock = row.inventory?.currentStock ?? 0;
-  const variantStockTotal = row.variants.reduce((sum, v) => sum + v.stock, 0);
+  const variantStockTotal = row.variants.reduce((sum, v) => sum + v.currentStock, 0);
 
   return {
     id: row.id,
@@ -154,7 +152,7 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     name: row.name,
     shortDesc: row.shortDesc,
     fullDesc: row.fullDesc,
-    category: row.category,
+    categories: row.categories,
     brand: row.brand,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
@@ -173,16 +171,18 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
       sortOrder: img.sortOrder,
     })),
     specs: row.specs,
-    variants: row.variants.map((v) => ({
-      sku: v.sku,
-      color: v.color,
-      size: v.size,
-      material: v.material,
-      pattern: v.pattern,
-      price: v.price ? toNumber(v.price) : null,
-      inStock: v.stock > 0,
-      images: v.images.map((i) => i.url),
-    })),
+    // `variantType` tells the storefront what "value" means for this
+    // product ("Colour", "Size", a custom admin-defined label, etc.) —
+    // null when the product has no variants.
+    variantType: row.variantType,
+    variants: row.variants
+      .filter((v) => v.status !== "ARCHIVED") // sold-out variants stay visible; archived ones don't
+      .map((v) => ({
+        sku: v.sku,
+        value: v.value,
+        inStock: v.currentStock > 0,
+        image: v.image?.url ?? null,
+      })),
     inStock: baseStock > 0 || variantStockTotal > 0,
     seoTitle: row.seoTitle,
     seoDescription: row.seoDescription,

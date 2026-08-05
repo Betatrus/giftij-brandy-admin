@@ -16,7 +16,6 @@ async function requireSession() {
 export async function uploadProductImage(params: {
   productId: string;
   fileBase64: string; // data URL, e.g. "data:image/png;base64,...."
-  variantId?: string;
   altText?: string;
 }) {
   const session = await requireSession();
@@ -27,27 +26,22 @@ export async function uploadProductImage(params: {
   const { url, cloudinaryId, width, height, format } = await uploadImage(params.fileBase64);
 
   const maxOrder = await prisma.productImage.aggregate({
-    where: params.variantId
-      ? { variantId: params.variantId }
-      : { productId: params.productId },
+    where: { productId: params.productId },
     _max: { sortOrder: true },
   });
   const isFirstImage = (maxOrder._max.sortOrder ?? -1) < 0;
 
   const image = await prisma.productImage.create({
     data: {
-      productId: params.variantId ? undefined : params.productId,
-      variantId: params.variantId ?? undefined,
+      productId: params.productId,
       url,
       cloudinaryId,
       altText: params.altText ?? null,
       width,
       height,
       format,
-      // First image uploaded for the base product becomes the cover;
-      // anything attached to a variant is VARIANT regardless of order;
-      // everything else is a GALLERY image.
-      imageType: params.variantId ? "VARIANT" : isFirstImage ? "COVER" : "GALLERY",
+      // First image uploaded becomes the cover; everything else is GALLERY.
+      imageType: isFirstImage ? "COVER" : "GALLERY",
       sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
     },
   });
@@ -57,6 +51,58 @@ export async function uploadProductImage(params: {
     action: "PRODUCT_IMAGE_UPLOAD",
     resource: `Product:${params.productId}`,
     metadata: { imageId: image.id, imageType: image.imageType },
+  });
+
+  revalidatePath(`/admin/products/${params.productId}/edit`);
+  return image;
+}
+
+/**
+ * A variant has AT MOST one image (DB-enforced via a unique constraint on
+ * ProductImage.variantId). Uploading a new one for a variant that already
+ * has an image REPLACES it — deletes the old Cloudinary asset and row
+ * first — rather than erroring and making the admin delete it manually
+ * first. This is the one-image-per-variant rule enforced as a smooth
+ * replace, not a hard stop.
+ */
+export async function uploadVariantImage(params: {
+  variantId: string;
+  productId: string; // for revalidation and the activity log resource
+  fileBase64: string;
+  altText?: string;
+}) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "products:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to upload product media");
+  }
+
+  const existing = await prisma.productImage.findUnique({ where: { variantId: params.variantId } });
+  if (existing) {
+    await deleteImage(existing.cloudinaryId);
+    await prisma.productImage.delete({ where: { id: existing.id } });
+  }
+
+  const { url, cloudinaryId, width, height, format } = await uploadImage(params.fileBase64);
+
+  const image = await prisma.productImage.create({
+    data: {
+      variantId: params.variantId,
+      url,
+      cloudinaryId,
+      altText: params.altText ?? null,
+      width,
+      height,
+      format,
+      imageType: "VARIANT",
+      sortOrder: 0,
+    },
+  });
+
+  await logActivity({
+    userId: session.user.id,
+    action: "VARIANT_IMAGE_UPLOAD",
+    resource: `ProductVariant:${params.variantId}`,
+    metadata: { imageId: image.id, replaced: !!existing },
   });
 
   revalidatePath(`/admin/products/${params.productId}/edit`);

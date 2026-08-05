@@ -8,15 +8,16 @@ import { Badge } from "@/components/ui/badge";
 import { StockAdjustDialog } from "./stock-adjust-dialog";
 
 type InventoryRow = {
-  id: string;
-  currentStock: number;
-  reservedStock: number;
-  soldStock: number;
-  damagedStock: number;
-  returnedStock: number;
-  lowStockThreshold: number;
-  product: { id: string; name: string; sku: string; status: string };
+  productId: string;
+  productName: string;
+  productSku: string;
+  variantType: string | null;
+  base: { id: string; currentStock: number; lowStockThreshold: number } | null;
+  variants: { id: string; value: string; sku: string; currentStock: number; lowStockThreshold: number; status: string }[];
+  isLowStock: boolean;
 };
+
+type AdjustTarget = { kind: "base"; productId: string; label: string } | { kind: "variant"; variantId: string; label: string };
 
 export function InventoryTable() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
@@ -26,7 +27,7 @@ export function InventoryTable() {
   const [search, setSearch] = useState("");
   const [lowStockOnly, setLowStockOnly] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [adjustTarget, setAdjustTarget] = useState<{ productId: string; name: string } | null>(null);
+  const [adjustTarget, setAdjustTarget] = useState<AdjustTarget | null>(null);
 
   async function load() {
     setLoading(true);
@@ -61,63 +62,101 @@ export function InventoryTable() {
         </label>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
-        <table className="w-full font-body text-sm">
-          <thead className="bg-cream/50 text-ink/60 text-left">
-            <tr>
-              <th className="px-4 py-3">Product</th>
-              <th className="px-4 py-3">SKU</th>
-              <th className="px-4 py-3">Current</th>
-              <th className="px-4 py-3">Reserved</th>
-              <th className="px-4 py-3">Sold</th>
-              <th className="px-4 py-3">Damaged</th>
-              <th className="px-4 py-3">Returned</th>
-              <th className="px-4 py-3"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-ink/40">Loading inventory...</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={8} className="px-4 py-10 text-center text-ink/40">No inventory records match your filters.</td></tr>
-            ) : (
-              rows.map((row) => {
-                const low = row.currentStock <= row.lowStockThreshold;
-                return (
-                  <tr key={row.id} className="border-t border-cream">
-                    <td className="px-4 py-3">{row.product.name}</td>
-                    <td className="px-4 py-3 text-ink/60">{row.product.sku}</td>
-                    <td className="px-4 py-3">
-                      <Badge label={String(row.currentStock)} tone={low ? "LOW_STOCK" : "ACTIVE"} />
-                    </td>
-                    <td className="px-4 py-3 text-ink/60">{row.reservedStock}</td>
-                    <td className="px-4 py-3 text-ink/60">{row.soldStock}</td>
-                    <td className="px-4 py-3 text-ink/60">{row.damagedStock}</td>
-                    <td className="px-4 py-3 text-ink/60">{row.returnedStock}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => setAdjustTarget({ productId: row.product.id, name: row.product.name })}
-                        className="text-xs text-gold underline"
-                      >
-                        Adjust
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+      <div className="space-y-3">
+        {loading ? (
+          <div className="bg-white rounded-2xl shadow-soft px-4 py-10 text-center text-ink/40 font-body text-sm">
+            Loading inventory...
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="bg-white rounded-2xl shadow-soft px-4 py-10 text-center text-ink/40 font-body text-sm">
+            No inventory records match your filters.
+          </div>
+        ) : (
+          rows.map((row) => (
+            <div key={row.productId} className="bg-white rounded-2xl shadow-soft overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-3 bg-cream/40">
+                <div>
+                  <span className="font-body text-sm text-ink font-medium">{row.productName}</span>
+                  <span className="font-body text-xs text-ink/50 ml-2">{row.productSku}</span>
+                  {row.isLowStock && <Badge label="Low stock" tone="LOW_STOCK" />}
+                </div>
+                {row.base && (
+                  <button
+                    onClick={() =>
+                      setAdjustTarget({ kind: "base", productId: row.productId, label: row.productName })
+                    }
+                    className="text-xs text-gold underline"
+                  >
+                    Adjust
+                  </button>
+                )}
+              </div>
+
+              {row.base ? (
+                <div className="px-4 py-3 font-body text-sm flex items-center gap-4">
+                  <span className="text-ink/60">Stock:</span>
+                  <Badge
+                    label={String(row.base.currentStock)}
+                    tone={row.base.currentStock <= row.base.lowStockThreshold ? "LOW_STOCK" : "ACTIVE"}
+                  />
+                </div>
+              ) : (
+                <table className="w-full font-body text-sm">
+                  <thead className="text-ink/50 text-left text-xs">
+                    <tr>
+                      <th className="px-4 py-2">{row.variantType || "Variant"}</th>
+                      <th className="px-4 py-2">SKU</th>
+                      <th className="px-4 py-2">Stock</th>
+                      <th className="px-4 py-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {row.variants.map((v) => (
+                      <tr key={v.id} className="border-t border-cream">
+                        <td className="px-4 py-2">{v.value}</td>
+                        <td className="px-4 py-2 text-ink/60">{v.sku}</td>
+                        <td className="px-4 py-2">
+                          <Badge
+                            label={String(v.currentStock)}
+                            tone={v.currentStock <= v.lowStockThreshold ? "LOW_STOCK" : "ACTIVE"}
+                          />
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          <button
+                            onClick={() =>
+                              setAdjustTarget({
+                                kind: "variant",
+                                variantId: v.id,
+                                label: `${row.productName} — ${v.value}`,
+                              })
+                            }
+                            className="text-xs text-gold underline"
+                          >
+                            Adjust
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          ))
+        )}
       </div>
 
-      <p className="font-body text-xs text-ink/40 mt-2">{total} item{total === 1 ? "" : "s"} total</p>
+      <p className="font-body text-xs text-ink/40 mt-2">{total} product{total === 1 ? "" : "s"} total</p>
 
       <Pagination page={page} pageCount={pageCount} onPageChange={setPage} />
 
       {adjustTarget && (
         <StockAdjustDialog
-          productId={adjustTarget.productId}
-          productName={adjustTarget.name}
+          target={
+            adjustTarget.kind === "base"
+              ? { kind: "base", productId: adjustTarget.productId }
+              : { kind: "variant", variantId: adjustTarget.variantId }
+          }
+          label={adjustTarget.label}
           onClose={() => setAdjustTarget(null)}
           onDone={() => { setAdjustTarget(null); load(); }}
         />

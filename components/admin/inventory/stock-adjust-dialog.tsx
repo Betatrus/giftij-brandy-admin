@@ -1,43 +1,53 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { adjustStock } from "@/lib/actions/inventory";
+import { useState } from "react";
+import { adjustStock, adjustVariantStock } from "@/lib/actions/inventory";
 import type { AdjustStockInput } from "@/lib/validators/inventory";
 
+type Target = { kind: "base"; productId: string } | { kind: "variant"; variantId: string };
+
 export function StockAdjustDialog({
-  productId,
-  productName,
+  target,
+  label,
   onClose,
   onDone,
 }: {
-  productId: string;
-  productName: string;
+  target: Target;
+  label: string;
   onClose: () => void;
   onDone: () => void;
 }) {
   const [changeType, setChangeType] = useState<AdjustStockInput["changeType"]>("INCREASE");
   const [quantity, setQuantity] = useState(1);
   const [reason, setReason] = useState("");
-  const [isPending, startTransition] = useTransition();
+  const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function submit() {
+  // Plain async + local state, not startTransition — see image-uploader.tsx
+  // and product-table.tsx for why an async callback inside startTransition
+  // is the wrong pattern under React 18.
+  async function submit() {
     setError(null);
-    startTransition(async () => {
-      try {
-        await adjustStock({ productId, changeType, quantity, reason });
-        onDone();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to adjust stock.");
+    setIsPending(true);
+    try {
+      if (target.kind === "base") {
+        await adjustStock({ productId: target.productId, changeType, quantity, reason });
+      } else {
+        await adjustVariantStock({ variantId: target.variantId, changeType, quantity, reason });
       }
-    });
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to adjust stock.");
+    } finally {
+      setIsPending(false);
+    }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
       <div className="bg-white rounded-2xl shadow-soft p-6 w-full max-w-sm">
         <h2 className="font-display text-lg text-ink mb-1">Adjust Stock</h2>
-        <p className="font-body text-sm text-ink/50 mb-4">{productName}</p>
+        <p className="font-body text-sm text-ink/50 mb-4">{label}</p>
 
         <label className="font-body text-sm text-ink/70">Change Type</label>
         <select

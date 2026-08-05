@@ -446,6 +446,173 @@ chore(lint): add missing ESLint config (classic format for ESLint 8 + eslint-con
 
 ---
 
+## Pre-Launch Schema Finalization: Many-to-Many Categories & Admin-Defined Variants
+
+Application code update following the final `schema.prisma` (Category M-N, admin-defined
+`variantType`, per-variant inventory). This is the code pass that was flagged as required
+after that schema was delivered — the app would not have built against it before this.
+
+### 1. Files Added
+
+- `lib/constants/variant-types.ts` — preset variant type list (`Colour`, `Size`,
+  `Material`) for the admin dropdown, plus the `Other` sentinel. Purely a UI convenience —
+  the database stores whatever string results, preset or custom.
+- `components/admin/products/category-select.tsx` — multi-select checkboxes replacing
+  the old single category dropdown
+- `components/admin/products/variants-section.tsx` — replaces `variant-editor.tsx`.
+  Handles the "has variants?" toggle, variant type selection (preset dropdown or custom
+  "Other" input), and the list of variant values, each with its own SKU, stock, and
+  single-image upload.
+
+### 2. Files Deleted
+
+- `components/admin/products/variant-editor.tsx` — replaced by `variants-section.tsx`
+
+### 3. Files Modified
+
+- `lib/validators/product.ts` — `categoryId` → `categoryIds: string[]` (min 1);
+  `variantSchema` reduced to `value`/`sku`/`stock`/`status` (no more `color`/`size`/
+  `material`/`pattern`/`price`); added `hasVariants: boolean` and `variantType:
+  string | null` with cross-field validation (`.refine()`) ensuring a variant type and
+  at least one variant are present when `hasVariants` is true, and that variants aren't
+  silently orphaned when it's false
+- `lib/validators/inventory.ts` — added `adjustVariantStockSchema`, parallel to the
+  existing base-inventory one
+- `lib/actions/products.ts` — `categories: { connect/set }` instead of a single FK;
+  variant create/update writes `value`/`currentStock` instead of the removed fields;
+  base `Inventory` is only created when `!hasVariants`; `updateProduct` now refuses to
+  turn variants off while variant rows still exist, rather than silently orphaning them
+- `lib/actions/inventory.ts` — added `adjustVariantStock()` and
+  `getVariantInventoryHistory()`; `listInventory()` now paginates by **product**, not by
+  inventory row, returning each product's base stock or its full variant list grouped
+  together; `getLowStockCount()` now accounts for variant-level stock too
+- `lib/actions/media.ts` — added `uploadVariantImage()`, which **replaces** an existing
+  variant image rather than erroring (matches the schema's one-image-per-variant
+  constraint as a smooth replace, not a hard stop the admin has to work around manually)
+- `lib/utils/serialize.ts` — removed variant `price` serialization (field no longer exists)
+- `components/admin/products/product-form.tsx` — category dropdown → `CategorySelect`;
+  `VariantEditor` → `VariantsSection`; wrapped in `FormProvider` so the variants section
+  can use `useFormContext`; Initial Stock field now hidden when the product has variants
+- `components/admin/products/product-table.tsx` — category column shows a joined list
+  instead of one name; stock column aggregates variant stock when present
+- `components/admin/inventory/inventory-table.tsx` — restructured to group by product,
+  with variant stock shown as sub-rows under their parent product (matches "Pedro Bag:
+  Black-6, Blue-3, Yellow-1" grouped together, not as unrelated rows)
+- `components/admin/inventory/stock-adjust-dialog.tsx` — now accepts a `target` (base
+  product or specific variant) instead of always assuming base inventory; also fixed the
+  same async-inside-`startTransition` anti-pattern flagged and fixed elsewhere in
+  Milestone 2/3 — this file had been missed in that earlier pass
+- `app/(admin)/products/[id]/edit/page.tsx` — `defaultValues` mapping rewritten for
+  `categoryIds`, `hasVariants`, `variantType`, and the new variant shape
+- `lib/api/public-product-select.ts` — `category` → `categories` array in both select
+  clauses and DTOs; `ProductDetail` DTO gains `variantType`; variant DTO simplified to
+  `{ sku, value, inStock, image }`; sold-out variants stay visible (filtered only by
+  `status !== ARCHIVED`, never by stock level) — per the confirmed business rule that
+  out-of-stock variants remain visible so customers know they exist
+- `app/api/v1/public/products/route.ts` — category filter now queries
+  `categories: { some: { slug } }` instead of a direct FK match
+- `docs/API_CONTRACT.md`, `docs/openapi.yaml` — updated for the many-to-many category
+  shape, `variantType`, and the simplified variant object, across the Data Model
+  Reference, both JSON examples, and the OpenAPI schemas
+
+### 4. Database Changes
+
+None new — this batch is the application code catching up to the `schema.prisma`
+delivered previously. See that delivery's own notes for the migration path.
+
+### 5. Environment Variable Changes
+
+None.
+
+### 6. Dependency Changes
+
+None.
+
+### 7. Testing Checklist
+
+**Features implemented:**
+- [x] Admin can select multiple categories per product
+- [x] Admin can toggle "has variants," pick a preset type or enter a custom one, and add
+      variant values with independent stock and a single optional image each
+- [x] Inventory page groups variant stock under its parent product
+- [x] Stock adjustment works against either base inventory or a specific variant, with
+      its own audit trail (`VariantInventoryLog`) either way
+- [x] Public API returns `categories` (array) and `variantType` + simplified `variants`
+- [x] Sold-out variants remain visible in the API response (not filtered out by stock)
+
+**Manual tests to perform on your machine:**
+1. `npx prisma generate && npm run build`
+2. Create a product with variants: toggle "has variants" on, pick "Colour," add
+   Black/Blue/Yellow with different stock counts, save. Confirm the product list shows
+   aggregated stock across all three.
+3. Try turning "has variants" back off on that product without removing the variants
+   first — confirm it's rejected with a clear message, not silently ignored
+4. Go to Inventory — confirm the product shows as one row with three variant sub-rows,
+   each independently adjustable
+5. Adjust one variant's stock (e.g. RETURN +2 on Blue) — confirm only that variant's
+   count changes, the others are untouched, and a `VariantInventoryLog` entry exists
+6. Upload an image to a variant, then upload a second one to the same variant — confirm
+   the first is replaced (old Cloudinary asset gone), not duplicated
+7. `curl` `GET /api/v1/public/products/:slug` on a variant product — confirm `variantType`
+   is present, `variants[]` has no stock counts (only `inStock` boolean), and a
+   zero-stock variant still appears in the array with `inStock: false`
+8. Assign a product to 2+ categories, confirm `GET /api/v1/public/products?category=X`
+   returns it for each category it belongs to
+
+**Known limitations:**
+- Same Prisma-generation sandbox limitation as every prior batch — `next lint` clean,
+  `tsc --noEmit` shows only the expected "Prisma client not generated" class of error.
+- Turning "has variants" off is blocked while variants exist, requiring the admin to
+  remove them one at a time first — no bulk "convert to non-variant product" action.
+  Reasonable friction for what should be a rare operation; flag if you want it smoothed
+  out later.
+- Milestone 4 (checkout) will need `reservedStock` semantics wired up for variants the
+  same way they're planned for base inventory — schema already supports it
+  (`ProductVariant.reservedStock` exists), just not used by anything yet.
+
+### 8. Suggested Git Commit Messages
+
+```
+feat(constants): add variant type presets for the admin UI
+
+feat(products): categoryIds array and admin-defined variantType in the validator
+
+feat(inventory): add variant-level stock adjustment validator
+
+feat(products): rewire product actions for many-to-many categories and variant-based inventory
+
+feat(inventory): variant-aware stock adjustment, grouped-by-product inventory listing
+
+feat(media): replace-on-reupload for variant images (one image per variant, enforced)
+
+fix(serialize): remove variant price serialization, field no longer exists
+
+feat(admin-ui): category multi-select and admin-defined variant type/value editor
+
+feat(admin-ui): grouped product/variant inventory table, target-flexible stock adjust dialog
+
+fix(admin-ui): fix async-in-startTransition in stock-adjust-dialog (missed in earlier pass)
+
+feat(api): categories array, variantType, and simplified variant shape in public product API
+
+docs: update API contract and OpenAPI spec for many-to-many categories and admin-defined variants
+```
+
+### 9. Documentation Updated
+
+`docs/API_CONTRACT.md` and `docs/openapi.yaml` — both updated in this batch, described above.
+
+### 10. Upgrade Instructions
+
+1. Copy all Added/Modified files into your project at the paths listed; delete
+   `variant-editor.tsx`.
+2. `npx prisma generate && npm run build`
+3. Run through the manual testing checklist above.
+4. Commit using the grouped messages above (or your own), then push.
+
+---
+
+
 ## Milestone 1: Foundation & Auth
 
 Delivered before this running-changelog convention started — no standalone

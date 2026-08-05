@@ -17,12 +17,8 @@ export function serializeProduct<T extends Record<string, unknown>>(product: T) 
     price: "price" in product ? toNum(product.price as Decimal) : undefined,
     costPrice: "costPrice" in product ? toNum(product.costPrice as Decimal) : undefined,
     discount: "discount" in product ? toNum(product.discount as Decimal | null) : undefined,
-    variants: Array.isArray((product as { variants?: unknown[] }).variants)
-      ? ((product as unknown as { variants: Record<string, unknown>[] }).variants).map((v) => ({
-          ...v,
-          price: toNum(v.price as Decimal | null),
-        }))
-      : undefined,
+    // No variant.price mapping — variants no longer carry a price field;
+    // every variant shares the base product's price.
   };
 }
 
