@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { StaffRole } from "@prisma/client";
-import { listProducts, archiveProduct, deleteProduct } from "@/lib/actions/products";
+import { listProducts, archiveProduct, deleteProduct, duplicateProduct } from "@/lib/actions/products";
 import { SearchInput } from "@/components/ui/search-input";
 import { Pagination } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Copy } from "lucide-react";
 
 type ProductRow = {
   id: string;
@@ -24,7 +26,19 @@ type ProductRow = {
 
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
 
+function stockInfo(p: ProductRow) {
+  const totalStock = p.inventory
+    ? p.inventory.currentStock
+    : p.variants.reduce((sum, v) => sum + v.currentStock, 0);
+  const lowStock = p.inventory
+    ? p.inventory.currentStock <= p.inventory.lowStockThreshold
+    : p.variants.some((v) => v.currentStock <= v.lowStockThreshold);
+  const hasVariants = p.variants.length > 0;
+  return { totalStock, lowStock, hasVariants };
+}
+
 export function ProductTable({ role, categories }: { role: StaffRole; categories: CategoryOption[] }) {
+  const router = useRouter();
   const [rows, setRows] = useState<ProductRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -36,6 +50,7 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
   const [selected, setSelected] = useState<string[]>([]);
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; mode: "archive" | "delete" } | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const canWrite = role === "SUPER_ADMIN" || role === "SUPPORT_ADMIN"; // both roles manage products
@@ -103,10 +118,24 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
     }
   }
 
+  async function handleDuplicate(id: string) {
+    setActionError(null);
+    setDuplicatingId(id);
+    try {
+      const newId = await duplicateProduct(id);
+      // Straight to editing the copy — the whole point is changing
+      // Name/Images/SKU right away, not sitting back on the list.
+      router.push(`/admin/products/${newId}/edit`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to duplicate product.");
+      setDuplicatingId(null);
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <div className="w-64">
+        <div className="w-full sm:w-64">
           <SearchInput placeholder="Search name or SKU..." onSearch={(v) => { setPage(1); setSearch(v); }} />
         </div>
         <select
@@ -132,7 +161,7 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
 
         <Link
           href="/admin/products/new"
-          className="ml-auto rounded-xl bg-gold text-white font-body text-sm px-4 py-2"
+          className="w-full sm:w-auto sm:ml-auto text-center rounded-xl bg-gold text-white font-body text-sm px-4 py-2"
         >
           + New Product
         </Link>
@@ -157,7 +186,8 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-soft overflow-hidden">
+      {/* Desktop table — unchanged, md and up only */}
+      <div className="hidden md:block bg-white rounded-2xl shadow-soft overflow-hidden">
         <table className="w-full font-body text-sm">
           <thead className="bg-cream/50 text-ink/60 text-left">
             <tr>
@@ -194,13 +224,7 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
               </tr>
             ) : (
               rows.map((p) => {
-                const totalStock = p.inventory
-                  ? p.inventory.currentStock
-                  : p.variants.reduce((sum, v) => sum + v.currentStock, 0);
-                const lowStock = p.inventory
-                  ? p.inventory.currentStock <= p.inventory.lowStockThreshold
-                  : p.variants.some((v) => v.currentStock <= v.lowStockThreshold);
-                const hasVariants = p.variants.length > 0;
+                const { totalStock, lowStock, hasVariants } = stockInfo(p);
                 return (
                   <tr key={p.id} className="border-t border-cream">
                     <td className="px-4 py-3">
@@ -246,7 +270,16 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                     <td className="px-4 py-3">
                       <Badge label={p.status} tone={p.status as "ACTIVE" | "DRAFT" | "ARCHIVED"} />
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      {canWrite && (
+                        <button
+                          onClick={() => handleDuplicate(p.id)}
+                          disabled={duplicatingId === p.id}
+                          className="text-ink/50 hover:text-ink text-xs underline mr-3 disabled:opacity-50"
+                        >
+                          {duplicatingId === p.id ? "Duplicating..." : "Duplicate"}
+                        </button>
+                      )}
                       {canWrite && p.status !== "ARCHIVED" && (
                         <button
                           onClick={() => setConfirmTarget({ id: p.id, mode: "archive" })}
@@ -262,6 +295,87 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Mobile cards — Shopify-style, no horizontal scroll, md:hidden */}
+      <div className="md:hidden space-y-3">
+        {loading ? (
+          <div className="bg-white rounded-2xl shadow-soft px-4 py-10 text-center text-ink/40 font-body text-sm">
+            Loading products...
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="bg-white rounded-2xl shadow-soft px-4 py-10 text-center text-ink/40 font-body text-sm">
+            No products found. Try adjusting your filters, or create your first product.
+          </div>
+        ) : (
+          rows.map((p) => {
+            const { totalStock, lowStock, hasVariants } = stockInfo(p);
+            return (
+              <div key={p.id} className="bg-white rounded-2xl shadow-soft overflow-hidden">
+                {p.images?.[0]?.url ? (
+                  <Image
+                    src={p.images[0].url}
+                    alt={p.name}
+                    width={400}
+                    height={240}
+                    className="w-full h-40 object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-40 bg-cream" />
+                )}
+
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <Link href={`/admin/products/${p.id}/edit`} className="font-body text-sm text-ink font-medium hover:underline">
+                      {p.name}
+                    </Link>
+                    <Badge label={p.status} tone={p.status as "ACTIVE" | "DRAFT" | "ARCHIVED"} />
+                  </div>
+                  <p className="font-body text-xs text-ink/50 mb-2">{p.sku}</p>
+                  <p className="font-body text-xs text-ink/60 mb-3">
+                    {p.categories.length > 0 ? p.categories.map((c) => c.name).join(", ") : "No category"}
+                  </p>
+
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-body text-sm text-ink">
+                      {p.price !== null && p.price !== undefined ? `₦${p.price.toLocaleString()}` : "—"}
+                    </span>
+                    {p.inventory || hasVariants ? (
+                      <Badge
+                        label={hasVariants ? `${totalStock} across ${p.variants.length}` : `${totalStock} in stock`}
+                        tone={lowStock ? "LOW_STOCK" : "ACTIVE"}
+                      />
+                    ) : null}
+                  </div>
+
+                  {canWrite && (
+                    <div className="flex items-center gap-4 pt-3 border-t border-cream font-body text-xs">
+                      <Link href={`/admin/products/${p.id}/edit`} className="text-gold">
+                        Edit
+                      </Link>
+                      <button
+                        onClick={() => handleDuplicate(p.id)}
+                        disabled={duplicatingId === p.id}
+                        className="text-ink/60 flex items-center gap-1 disabled:opacity-50"
+                      >
+                        <Copy size={12} />
+                        {duplicatingId === p.id ? "Duplicating..." : "Duplicate"}
+                      </button>
+                      {p.status !== "ARCHIVED" && (
+                        <button
+                          onClick={() => setConfirmTarget({ id: p.id, mode: "archive" })}
+                          className="text-ink/60 ml-auto"
+                        >
+                          Archive
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       <p className="font-body text-xs text-ink/40 mt-2">{total} product{total === 1 ? "" : "s"} total</p>

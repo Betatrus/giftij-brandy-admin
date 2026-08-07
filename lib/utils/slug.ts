@@ -22,13 +22,33 @@ export async function generateUniqueSlug(
   name: string,
   checkExists: (slug: string) => Promise<boolean>
 ): Promise<string> {
-  const base = slugify(name) || "item";
+  return generateUniqueValue(slugify(name) || "item", checkExists, (base, n) => `${base}-${n}`);
+}
+
+/**
+ * Generates a unique SKU from a base string (e.g. an existing SKU plus a
+ * "-COPY" suffix, for product duplication) by appending -2, -3, etc. if
+ * taken. No slugify transformation — SKUs keep whatever casing/format the
+ * admin already used.
+ */
+export async function generateUniqueSku(
+  baseSku: string,
+  checkExists: (sku: string) => Promise<boolean>
+): Promise<string> {
+  return generateUniqueValue(baseSku, checkExists, (base, n) => `${base}-${n}`);
+}
+
+async function generateUniqueValue(
+  base: string,
+  checkExists: (candidate: string) => Promise<boolean>,
+  suffix: (base: string, n: number) => string
+): Promise<string> {
   let candidate = base;
-  let suffix = 2;
+  let n = 2;
 
   while (await checkExists(candidate)) {
-    candidate = `${base}-${suffix}`;
-    suffix += 1;
+    candidate = suffix(base, n);
+    n += 1;
   }
 
   return candidate;

@@ -611,6 +611,102 @@ docs: update API contract and OpenAPI spec for many-to-many categories and admin
 4. Commit using the grouped messages above (or your own), then push.
 
 ---
+## Mobile & UX Enhancement — Batch 1: Mobile Shell
+
+Working from the uploaded, Neon-verified baseline (not reconstructed from memory). First batch
+of the approved mobile/UX specification — the hamburger sidebar, top bar, and dashboard grid.
+
+### 1. Files Added
+
+- `components/admin/mobile-topbar.tsx` — mobile-only top bar: hamburger button, "Giftij Brandy
+  Admin" wordmark, notification bell (placeholder — no notification system exists yet, matches
+  the spec's own "(notification icon placeholder)" wording), and a profile avatar showing the
+  signed-in staff member's initials
+- `components/admin/admin-shell.tsx` — new client wrapper holding the mobile sidebar
+  open/closed state and composing `MobileTopBar` + `Sidebar` + backdrop + main content. This
+  replaces the layout's previous direct `<Sidebar /><main>` rendering.
+
+### 2. Files Modified
+
+- `components/admin/sidebar.tsx` — now accepts `mobileOpen`/`onCloseMobile` props. Desktop
+  behavior is pixel-identical to before (`md:relative md:translate-x-0`, always visible).
+  Mobile: fixed, slides in from the left (`-translate-x-full` → `translate-x-0`) with a close
+  (X) button, and auto-closes when a nav link is tapped (so the drawer doesn't stay open over
+  the page you just navigated to).
+- `app/admin/layout.tsx` — now renders `<AdminShell>` instead of directly laying out
+  `Sidebar` + `main`. Passes `userName` through for the mobile top bar's avatar initials.
+
+### 3. Files Deleted
+
+None.
+
+### 4. Already Satisfied — No Change Made
+
+- **Dashboard 2-per-row mobile grid**: `app/admin/dashboard/page.tsx` already uses
+  `grid-cols-2 md:grid-cols-4`, which produces exactly the 2-per-row mobile / 4-per-row
+  desktop layout the spec asks for. Verified against the actual file rather than assumed;
+  no change needed or made.
+
+### 5. Database Changes
+
+None.
+
+### 6. Environment Variable Changes
+
+None.
+
+### 7. Dependency Changes
+
+None — `lucide-react` (already a dependency) provides the `Menu`, `X`, and `Bell` icons used.
+
+### 8. Testing Checklist
+
+**Features implemented:**
+- [x] Sidebar hidden by default on mobile, hamburger-triggered slide-in
+- [x] Mobile top bar: hamburger, logo, notification placeholder, avatar
+- [x] Backdrop closes the drawer on outside tap; X button and nav-link taps also close it
+- [x] Desktop layout unchanged (verified: same classes minus the mobile-only transform logic)
+
+**Manual tests to perform on your machine:**
+1. `npm run build`, then check both desktop (≥768px) and mobile (<768px) viewport widths
+2. Desktop: confirm the sidebar looks and behaves exactly as before — no visual regression
+3. Mobile: confirm the sidebar is gone by default, top bar shows hamburger/logo/bell/avatar
+4. Tap the hamburger — sidebar slides in from the left over a dark backdrop
+5. Tap a nav link — confirms navigation works AND the drawer closes automatically
+6. Reopen, tap the backdrop (not the drawer) — confirms it closes without navigating
+7. Reopen, tap the X button inside the drawer — same close behavior
+8. Confirm the avatar shows your actual initials (e.g. "Bright" → "B")
+
+**Known limitations:**
+- Same Prisma-generation sandbox limitation as every prior batch — `next lint` clean,
+  `tsc --noEmit` shows the same known error class (one more instance than before, since
+  `admin-shell.tsx` also imports the `StaffRole` type — not a new category of issue).
+- Notification bell is a non-functional placeholder, exactly as the spec requested — no
+  backend notification system exists to wire it to yet.
+
+### 9. Suggested Git Commit Messages
+
+```
+feat(admin-ui): mobile-responsive sidebar with slide-in drawer behavior
+
+feat(admin-ui): mobile top bar (hamburger, logo, notification placeholder, avatar)
+
+feat(admin-ui): AdminShell wrapper holding mobile nav state, replaces direct layout composition
+```
+
+### 10. Documentation Updated
+
+None this batch.
+
+### 11. Upgrade Instructions
+
+1. Copy the two new files into place, overwrite the two modified files.
+2. `npm run build`
+3. Run through the manual testing checklist above at both viewport sizes.
+4. Commit, push.
+
+---
+
 
 
 ## Milestone 1: Foundation & Auth

@@ -15,6 +15,7 @@ import {
   Settings,
   UserCog,
   LogOut,
+  X,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 
@@ -38,20 +39,50 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Staff", href: "/staff", icon: UserCog, superAdminOnly: true },
 ];
 
-export function Sidebar({ role }: { role: StaffRole }) {
+/**
+ * Desktop: always visible, static in the flex row (unchanged from before).
+ * Mobile: fixed, slides in from the left over the content when `mobileOpen`
+ * is true, controlled by the parent AdminShell. Never both at once — on
+ * mobile the whole thing lives off-screen (translate-x-full) until opened.
+ */
+export function Sidebar({
+  role,
+  mobileOpen,
+  onCloseMobile,
+}: {
+  role: StaffRole;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+}) {
   const pathname = usePathname();
   const visibleItems = NAV_ITEMS.filter(
     (item) => !item.superAdminOnly || role === "SUPER_ADMIN"
   );
 
   return (
-    <aside className="w-64 min-h-screen bg-white border-r border-cream flex flex-col">
-      <div className="px-6 py-6">
-        <h1 className="font-display text-xl text-ink">Giftij Brandy</h1>
-        <p className="font-body text-xs text-ink/50">Admin Portal</p>
+    <aside
+      className={`
+        fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-cream flex flex-col
+        transform transition-transform duration-200 ease-in-out
+        ${mobileOpen ? "translate-x-0" : "-translate-x-full"}
+        md:relative md:inset-auto md:translate-x-0 md:flex md:min-h-screen
+      `}
+    >
+      <div className="px-6 py-6 flex items-start justify-between">
+        <div>
+          <h1 className="font-display text-xl text-ink">Giftij Brandy</h1>
+          <p className="font-body text-xs text-ink/50">Admin Portal</p>
+        </div>
+        <button
+          onClick={onCloseMobile}
+          aria-label="Close menu"
+          className="md:hidden text-ink/40 hover:text-ink -mt-1 -mr-1 p-1"
+        >
+          <X size={20} />
+        </button>
       </div>
 
-      <nav className="flex-1 px-3 space-y-1">
+      <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
         {visibleItems.map((item) => {
           const active = pathname.startsWith(item.href);
           const Icon = item.icon;
@@ -59,6 +90,7 @@ export function Sidebar({ role }: { role: StaffRole }) {
             <Link
               key={item.href}
               href={item.href}
+              onClick={onCloseMobile}
               className={`flex items-center gap-3 px-3 py-2 rounded-xl font-body text-sm transition-colors ${
                 active
                   ? "bg-cream text-ink font-medium"

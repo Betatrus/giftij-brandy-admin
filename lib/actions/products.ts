@@ -7,7 +7,7 @@ import { hasPermission, stripFinancialFields, stripFinancialFieldsFromList } fro
 import { logActivity } from "@/lib/activity-log";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { getPagination, getPageCount, DEFAULT_PAGE_SIZE } from "@/lib/utils/pagination";
-import { generateUniqueSlug } from "@/lib/utils/slug";
+import { generateUniqueSlug, generateUniqueSku } from "@/lib/utils/slug";
 import { assertValidProductTransition } from "@/lib/utils/product-lifecycle";
 import { revalidatePath, revalidateTag } from "next/cache";
 
@@ -265,6 +265,96 @@ export async function updateProduct(id: string, input: ProductInput) {
   revalidateTag("products");
 
   return id;
+}
+
+// ------------------------------------------------------------------
+// DUPLICATE
+// ------------------------------------------------------------------
+/**
+ * Creates a new DRAFT product copied from an existing one — categories,
+ * pricing, specs, and variant structure carry over; images do NOT (a
+ * duplicate needs its own photos, not a second reference to the same
+ * Cloudinary assets), and stock starts at 0 for every variant / the base
+ * Inventory row, since a "Pedro Brown Leather" duplicated from "Pedro
+ * Black Leather" is a genuinely new item with nothing in stock yet, not
+ * a copy of the original's current stock count.
+ */
+export async function duplicateProduct(id: string) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "products:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to create products");
+  }
+
+  const source = await prisma.product.findUniqueOrThrow({
+    where: { id },
+    include: {
+      categories: { select: { id: true } },
+      specs: true,
+      variants: { where: { status: { not: "ARCHIVED" } } },
+    },
+  });
+
+  const newName = `Copy of ${source.name}`;
+  const newSlug = await generateUniqueSlug(newName, (candidate) => slugExists(candidate));
+  const newSku = await generateUniqueSku(`${source.sku}-COPY`, async (candidate) => {
+    const existing = await prisma.product.findUnique({ where: { sku: candidate } });
+    return !!existing;
+  });
+
+  const variantCreates = await Promise.all(
+    source.variants.map(async (v: { value: string; sku: string }) => ({
+      value: v.value,
+      sku: await generateUniqueSku(`${v.sku}-COPY`, async (candidate) => {
+        const existing = await prisma.productVariant.findUnique({ where: { sku: candidate } });
+        return !!existing;
+      }),
+      currentStock: 0,
+      status: "ACTIVE" as const,
+    }))
+  );
+
+  const canSeeFinancials = hasPermission(session.user.role, "products:read:financials");
+
+  const product = await prisma.product.create({
+    data: {
+      name: newName,
+      slug: newSlug,
+      shortDesc: source.shortDesc,
+      fullDesc: source.fullDesc,
+      categories: { connect: source.categories.map((c: { id: string }) => ({ id: c.id })) },
+      brand: source.brand,
+      sku: newSku,
+      barcode: null, // barcode is physical-item-specific; never copied
+      price: source.price,
+      costPrice: canSeeFinancials ? source.costPrice : 0,
+      discount: source.discount,
+      currency: source.currency,
+      weight: source.weight,
+      dimensions: source.dimensions,
+      warranty: source.warranty,
+      seoTitle: null,
+      seoDescription: null,
+      status: "DRAFT", // always starts as Draft, regardless of the source's status
+      tags: source.tags,
+      featuredFlags: [], // a half-finished duplicate should never inherit homepage placement
+      variantType: source.variantType,
+      specs: { create: source.specs.map((s: { label: string; value: string }) => ({ label: s.label, value: s.value })) },
+      variants: variantCreates.length ? { create: variantCreates } : undefined,
+      inventory: variantCreates.length ? undefined : { create: { currentStock: 0 } },
+    },
+  });
+
+  await logActivity({
+    userId: session.user.id,
+    action: "PRODUCT_DUPLICATE",
+    resource: `Product:${product.id}`,
+    metadata: { duplicatedFrom: id, sourceName: source.name },
+  });
+
+  revalidatePath("/admin/products");
+  revalidateTag("products");
+
+  return product.id;
 }
 
 // ------------------------------------------------------------------
