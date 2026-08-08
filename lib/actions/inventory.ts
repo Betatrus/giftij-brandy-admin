@@ -182,6 +182,7 @@ export async function listInventory(params: {
         sku: true,
         status: true,
         variantType: true,
+        images: { select: { url: true }, orderBy: { sortOrder: "asc" }, take: 1 },
         inventory: { select: { id: true, currentStock: true, lowStockThreshold: true } },
         variants: {
           select: { id: true, value: true, sku: true, currentStock: true, lowStockThreshold: true, status: true },
@@ -196,6 +197,7 @@ export async function listInventory(params: {
     productId: p.id,
     productName: p.name,
     productSku: p.sku,
+    productImage: p.images[0]?.url ?? null,
     variantType: p.variantType,
     base: p.inventory,
     variants: p.variants,

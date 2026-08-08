@@ -3,7 +3,7 @@
 import { useForm, FormProvider } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { StaffRole } from "@prisma/client";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { createProduct, updateProduct } from "@/lib/actions/products";
@@ -12,6 +12,7 @@ import { VariantsSection } from "./variants-section";
 import { FeaturedToggles } from "./featured-toggles";
 import { ImageUploader } from "./image-uploader";
 import { CategorySelect } from "./category-select";
+import { useUnsavedChanges } from "@/lib/context/unsaved-changes-context";
 
 type ExistingImage = { id: string; url: string; sortOrder: number };
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
@@ -56,10 +57,30 @@ export function ProductForm({
     register,
     handleSubmit,
     watch,
-    formState: { errors },
+    formState: { errors, isDirty },
   } = form;
 
   const hasVariants = watch("hasVariants");
+  const { setDirty } = useUnsavedChanges();
+
+  // Feeds the shared context so the sidebar, breadcrumbs, and back link
+  // all know to confirm before navigating away — not just this form.
+  useEffect(() => {
+    setDirty(isDirty);
+  }, [isDirty, setDirty]);
+
+  // Covers hard navigation the in-app guard can't catch: closing the tab,
+  // refreshing, or typing a new URL directly into the address bar.
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
 
   async function onSubmit(data: ProductInput) {
     setSaving(true);
@@ -67,9 +88,11 @@ export function ProductForm({
     try {
       if (productId) {
         await updateProduct(productId, data);
+        setDirty(false); // saved — no longer unsaved, don't prompt on the refresh below
         router.refresh();
       } else {
         const id = await createProduct(data);
+        setDirty(false); // saved — don't prompt on the redirect to the new product's edit page
         router.push(`/admin/products/${id}/edit`);
       }
     } catch (err) {

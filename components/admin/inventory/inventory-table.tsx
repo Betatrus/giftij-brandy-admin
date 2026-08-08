@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import Image from "next/image";
+import { useSearchParams } from "next/navigation";
 import { listInventory } from "@/lib/actions/inventory";
 import { SearchInput } from "@/components/ui/search-input";
 import { Pagination } from "@/components/ui/pagination";
@@ -11,6 +14,7 @@ type InventoryRow = {
   productId: string;
   productName: string;
   productSku: string;
+  productImage: string | null;
   variantType: string | null;
   base: { id: string; currentStock: number; lowStockThreshold: number } | null;
   variants: { id: string; value: string; sku: string; currentStock: number; lowStockThreshold: number; status: string }[];
@@ -20,14 +24,16 @@ type InventoryRow = {
 type AdjustTarget = { kind: "base"; productId: string; label: string } | { kind: "variant"; variantId: string; label: string };
 
 export function InventoryTable() {
+  const searchParams = useSearchParams();
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [search, setSearch] = useState("");
-  const [lowStockOnly, setLowStockOnly] = useState(false);
+  const [lowStockOnly, setLowStockOnly] = useState(() => searchParams.get("lowStock") === "true");
   const [loading, setLoading] = useState(true);
   const [adjustTarget, setAdjustTarget] = useState<AdjustTarget | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -45,6 +51,26 @@ export function InventoryTable() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, search, lowStockOnly]);
+
+  // Deep-link support: /admin/inventory#product-<id> (used by the "View
+  // in Inventory" link on the product edit page) scrolls to and briefly
+  // highlights that product's row. Only works if the product is on the
+  // current (first, unfiltered) page — a product buried on page 3 of a
+  // large, filtered inventory list won't be found by this alone.
+  useEffect(() => {
+    if (typeof window === "undefined" || rows.length === 0) return;
+    const hash = window.location.hash;
+    if (!hash.startsWith("#product-")) return;
+    const id = hash.replace("#product-", "");
+    const el = document.getElementById(`product-${id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedId(id);
+      const timeout = setTimeout(() => setHighlightedId(null), 2500);
+      return () => clearTimeout(timeout);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   return (
     <div>
@@ -73,13 +99,34 @@ export function InventoryTable() {
           </div>
         ) : (
           rows.map((row) => (
-            <div key={row.productId} className="bg-white rounded-2xl shadow-soft overflow-hidden">
+            <div
+              key={row.productId}
+              id={`product-${row.productId}`}
+              className={`bg-white rounded-2xl shadow-soft overflow-hidden transition-shadow ${
+                highlightedId === row.productId ? "ring-2 ring-gold" : ""
+              }`}
+            >
               <div className="flex items-center justify-between px-4 py-3 bg-cream/40">
-                <div>
-                  <span className="font-body text-sm text-ink font-medium">{row.productName}</span>
-                  <span className="font-body text-xs text-ink/50 ml-2">{row.productSku}</span>
+                <Link href={`/admin/products/${row.productId}/edit`} className="flex items-center gap-3 group">
+                  {row.productImage ? (
+                    <Image
+                      src={row.productImage}
+                      alt={row.productName}
+                      width={32}
+                      height={32}
+                      className="rounded-lg object-cover"
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-lg bg-cream" />
+                  )}
+                  <span>
+                    <span className="font-body text-sm text-ink font-medium group-hover:underline">
+                      {row.productName}
+                    </span>
+                    <span className="font-body text-xs text-ink/50 ml-2">{row.productSku}</span>
+                  </span>
                   {row.isLowStock && <Badge label="Low stock" tone="LOW_STOCK" />}
-                </div>
+                </Link>
                 {row.base && (
                   <button
                     onClick={() =>

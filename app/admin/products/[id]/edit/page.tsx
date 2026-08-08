@@ -3,6 +3,8 @@ import { getProduct } from "@/lib/actions/products";
 import { listCategoriesFlat } from "@/lib/actions/categories";
 import { serializeProduct } from "@/lib/utils/serialize";
 import { ProductForm } from "@/components/admin/products/product-form";
+import { Breadcrumbs } from "@/components/ui/breadcrumbs";
+import { BackLink } from "@/components/ui/back-link";
 import type { ProductInput } from "@/lib/validators/product";
 
 export default async function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
@@ -71,7 +73,20 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
 
   return (
     <div>
-      <h1 className="font-display text-2xl text-ink mb-1">Edit Product</h1>
+      <Breadcrumbs
+        items={[
+          { label: "Home", href: "/admin/dashboard" },
+          { label: "Products", href: "/admin/products" },
+          { label: product.name },
+        ]}
+      />
+      <BackLink href="/admin/products" label="Back to Products" />
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="font-display text-2xl text-ink">Edit Product</h1>
+        <a href={`/admin/inventory#product-${id}`} className="font-body text-xs text-gold underline">
+          View in Inventory →
+        </a>
+      </div>
       <p className="font-body text-sm text-ink/50 mb-6">{product.name}</p>
       <ProductForm
         role={session!.user.role}

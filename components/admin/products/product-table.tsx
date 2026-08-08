@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { StaffRole } from "@prisma/client";
 import { listProducts, archiveProduct, deleteProduct, duplicateProduct } from "@/lib/actions/products";
 import { SearchInput } from "@/components/ui/search-input";
@@ -39,19 +39,43 @@ function stockInfo(p: ProductRow) {
 
 export function ProductTable({ role, categories }: { role: StaffRole; categories: CategoryOption[] }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [rows, setRows] = useState<ProductRow[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [pageCount, setPageCount] = useState(1);
-  const [search, setSearch] = useState("");
-  const [categoryId, setCategoryId] = useState("");
-  const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; mode: "archive" | "delete" } | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Filters live in the URL, not plain component state — so the browser's
+  // Back button and the "Back to Products" link both restore exactly
+  // where the admin was (search term, category, status, and page all
+  // survive), per the "preserve search/filters/sorting/pagination when
+  // navigating back" requirement.
+  const search = searchParams.get("q") ?? "";
+  const categoryId = searchParams.get("category") ?? "";
+  const status = searchParams.get("status") ?? "";
+  const page = Number(searchParams.get("page") ?? "1");
+
+  function updateFilter(key: "q" | "category" | "status", value: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set(key, value);
+    else params.delete(key);
+    params.delete("page"); // any filter change resets back to page 1
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }
+
+  function setPage(value: number) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value > 1) params.set("page", String(value));
+    else params.delete("page");
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }
 
   const canWrite = role === "SUPER_ADMIN" || role === "SUPPORT_ADMIN"; // both roles manage products
 
@@ -136,11 +160,11 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="w-full sm:w-64">
-          <SearchInput placeholder="Search name or SKU..." onSearch={(v) => { setPage(1); setSearch(v); }} />
+          <SearchInput placeholder="Search name or SKU..." onSearch={(v) => updateFilter("q", v)} initialValue={search} />
         </div>
         <select
           value={categoryId}
-          onChange={(e) => { setPage(1); setCategoryId(e.target.value); }}
+          onChange={(e) => updateFilter("category", e.target.value)}
           className="rounded-xl border border-cream px-3 py-2 font-body text-sm"
         >
           <option value="">All categories</option>
@@ -150,7 +174,7 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
         </select>
         <select
           value={status}
-          onChange={(e) => { setPage(1); setStatus(e.target.value); }}
+          onChange={(e) => updateFilter("status", e.target.value)}
           className="rounded-xl border border-cream px-3 py-2 font-body text-sm"
         >
           <option value="">All statuses</option>

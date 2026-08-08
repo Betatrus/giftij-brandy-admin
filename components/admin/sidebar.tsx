@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
+import { useGuardedClick, useUnsavedChanges } from "@/lib/context/unsaved-changes-context";
 
 type NavItem = {
   label: string;
@@ -55,6 +56,8 @@ export function Sidebar({
   onCloseMobile: () => void;
 }) {
   const pathname = usePathname();
+  const guardedClick = useGuardedClick();
+  const { confirmNavigation } = useUnsavedChanges();
   const visibleItems = NAV_ITEMS.filter(
     (item) => !item.superAdminOnly || role === "SUPER_ADMIN"
   );
@@ -90,7 +93,9 @@ export function Sidebar({
             <Link
               key={item.href}
               href={item.href}
-              onClick={onCloseMobile}
+              onClick={(e) => {
+                if (guardedClick(e)) onCloseMobile();
+              }}
               className={`flex items-center gap-3 px-3 py-2 rounded-xl font-body text-sm transition-colors ${
                 active
                   ? "bg-cream text-ink font-medium"
@@ -106,7 +111,9 @@ export function Sidebar({
 
       <div className="p-3 border-t border-cream">
         <button
-          onClick={() => signOut({ callbackUrl: "/login" })}
+          onClick={() => {
+            if (confirmNavigation()) signOut({ callbackUrl: "/login" });
+          }}
           className="w-full flex items-center gap-3 px-3 py-2 rounded-xl font-body text-sm text-ink/60 hover:bg-cream/60"
         >
           <LogOut size={18} />
