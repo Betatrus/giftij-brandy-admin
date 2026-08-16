@@ -707,6 +707,266 @@ None this batch.
 
 ---
 
+## Product Form Refinement & Category Seed
+
+Targeted fixes on top of Batch 3, per your explicit UX corrections. No schema changes — the
+underlying data model (Category, ProductVariant, Inventory) already fully supported everything
+requested; this was UI-layer and seed-data work only. Full inspection notes below.
+
+### 1. Files Modified
+
+- `components/admin/products/product-form.tsx`:
+  - **Reverted mobile grid collapse for genuinely comfortable short-field pairs**: SKU/Barcode
+    and the Price/Cost/Discount/Currency group are back to a fixed `grid-cols-2` (side-by-side
+    even on mobile), per your explicit examples. Product Specifications' Weight/Dimensions/
+    Warranty group is also back to fixed 2-column, now that SEO and Initial Stock have moved
+    out of it (see below) leaving just three short fields.
+  - **SEO split into its own standalone section**, no longer merged into Specifications/
+    Logistics.
+  - **Initial Stock moved out of Specifications entirely** — it now lives inside the Variants
+    section itself (see below), directly next to the "has variants" toggle that determines
+    whether it's even relevant.
+  - **Section order now matches the requested flow**: Core Details → Pricing →
+    Specifications → (custom Specs) → Variants/Inventory → Homepage Placement → SEO.
+  - Removed the now-unused `watch("hasVariants")` — `VariantsSection` manages that state
+    internally already, this was dead code.
+
+- `components/admin/products/variants-section.tsx`:
+  - **Real bug fixed**: the variant values list (and "+ Add" button) previously appeared as
+    soon as "has variants" was checked, *before* a variant type was selected — contradicting
+    the explicit requirement that values only appear after a type is chosen. Now gated behind
+    `!!variantType` as well.
+  - **Explicit stock-transition messaging added**: when variants are enabled, a note now reads
+    "Stock will be managed per variant below — the product no longer has one combined stock
+    count," directly in the card, not just implied by field disappearance.
+  - **Initial Stock now lives here** (create mode only) — in the "off" (no variants) state,
+    right where the toggle that governs it sits. In edit mode, a non-variant product instead
+    shows "Stock is managed from the Inventory page" with a link (reusing the `#product-<id>`
+    deep-link already built in the Navigation batch), since stock changes for existing
+    non-variant products go through the Inventory page's audit-logged adjustment flow, not a
+    raw field on the product form.
+
+### 2. Files Added
+
+- `prisma/seed-categories.ts` — idempotent (upsert-on-slug) seed for exactly the two real
+  launch categories: **Coach Bag** and **Rough Body**. Safe to run repeatedly, safe to run
+  alongside any other categories that may already exist — it only ever touches these two.
+  Supersedes `prisma/backfill-batch1.ts`'s generic placeholder category list, which is now
+  formally superseded (that file was already flagged obsolete when the Category model became
+  many-to-many; recommend deleting it rather than running it, to avoid confusion between the
+  two).
+
+### 3. Package Script Added
+
+- `npm run prisma:seed-categories` → runs the new seed script.
+
+### 4. Inspection Findings (per your required verification step)
+
+**Already correct, confirmed by inspection, no changes made:**
+- `Category` model already has `name`/`slug`/`isActive` (archive)/`parentId` (hierarchy) and a
+  many-to-many relation to `Product` — fully supports "add/edit/archive category" and
+  "products can belong to one or more categories" with zero schema work.
+- `listCategoriesFlat()` / `createCategory()` already exist in `lib/actions/categories.ts`.
+  Category selection in the product form already reads live from the database — never
+  hardcoded, confirmed by re-reading `category-select.tsx` and its data source.
+- `ProductVariant`/`Inventory` models already correctly separate variant-owned stock from
+  base-product stock, with independent audit trails (`VariantInventoryLog`/`InventoryLog`).
+  No parallel/competing stock source exists at the schema level.
+- Archiving a category does not touch product relationships — the many-to-many join table
+  rows are untouched by `isActive` toggling, so existing product-category assignments survive
+  an archive exactly as required.
+
+**Gaps found and fixed (detailed above):** variant values appearing before type selection,
+missing stock-transition messaging, SEO/Initial Stock placement, and the two categories not
+being seeded anywhere with the correct names.
+
+**Not built, not requested by this message**: full Category Management admin page
+(view/add/edit/archive UI). The action functions this would need only partially exist
+(`listCategoriesFlat`, `createCategory` — no `updateCategory`/`archiveCategory` yet). You've
+referred to this as something the admin should "eventually" have — treating it as still
+deferred (previously scoped as its own batch) rather than assuming it's wanted now. Flag if
+you want it pulled forward.
+
+### 5. Database Changes
+
+None. No migration required — confirmed by inspection that the existing schema already
+supports every behavior requested.
+
+### 6. Environment Variable Changes
+
+None.
+
+### 7. Dependency Changes
+
+None.
+
+### 8. Testing Checklist
+
+**Manual tests to perform on your machine:**
+1. `npx prisma generate && npm run build`
+2. `npm run prisma:seed-categories` — confirm both categories appear (check via the product
+   form's category checkboxes, or Prisma Studio)
+3. New product, don't enable variants — confirm Initial Stock now appears inside the Variants
+   card (not Specifications), and that a plain stock number saves correctly
+4. Enable variants, select a type — confirm the values list does **not** appear until a type
+   is actually chosen, and that the "stock will be managed per variant" message shows
+5. Desktop: confirm SKU/Barcode and Price/Cost/Discount/Currency are still side-by-side, same
+   as before Batch 3's mobile changes ever touched them
+6. Mobile (<768px): confirm those same short-field pairs are *comfortably* side-by-side (not
+   cramped/overflowing) — this is the judgment call worth double-checking on an actual small
+   screen, not just a browser devtools resize
+7. Confirm SEO is now its own card, separate from Specifications
+8. Edit an existing non-variant product — confirm the "Stock is managed from the Inventory
+   page" link appears and correctly deep-links to that product's inventory row
+
+**Known limitations:**
+- Same Prisma-generation sandbox limitation as every prior batch — clean `next lint`,
+  `tsc --noEmit` at the same known count (17), nothing new.
+- "Comfortable side-by-side on mobile" for SKU/Barcode and Price/Cost/Discount/Currency is a
+  judgment call on my part based on your examples — genuinely worth checking on a real small
+  screen (or narrow devtools viewport) rather than assuming it's right; easy to flip back to
+  responsive single-column for a specific pair if any of them feel cramped in practice.
+
+### 9. Suggested Git Commit Messages
+
+```
+fix(variants): gate variant values list behind variant type selection
+
+feat(variants): add explicit stock-transition messaging, move Initial Stock into this section
+
+fix(product-form): revert mobile grid collapse for comfortable short-field pairs
+
+feat(product-form): split SEO into its own standalone section
+
+refactor(product-form): reorder sections to match requested flow (Variants before Homepage Placement)
+
+feat(seed): add idempotent seed script for Coach Bag and Rough Body categories
+```
+
+### 10. Documentation Updated
+
+None this batch.
+
+### 11. Upgrade Instructions
+
+1. Overwrite `product-form.tsx`, `variants-section.tsx`, `package.json`; add `seed-categories.ts`.
+2. `npm run build`
+3. `npm run prisma:seed-categories`
+4. Run through the manual testing checklist above.
+5. Commit, push.
+
+---
+
+## Staff Management Module (Phase: Staff/Settings, per architecture assessment ordering)
+
+First of the two zero-schema-dependency modules from the last assessment. No Prisma changes —
+`User.role`/`isActive` and the existing `staff:manage` RBAC permission already supported
+everything this needed.
+
+### 1. Files Added
+
+- `lib/validators/staff.ts` — `createStaffSchema`, `resetPasswordSchema`
+- `lib/actions/staff.ts` — `listStaff`, `createStaff`, `updateStaffRole`, `toggleStaffActive`,
+  `resetStaffPassword`, `getStaffActivity`. Every mutation requires `staff:manage`
+  (Super Admin only — reused the exact permission already defined in `lib/permissions.ts`, not
+  a new check). Self-protection built in: a Super Admin can't demote or revoke their own
+  account (would risk locking everyone out with no other Super Admin able to undo it).
+- `components/admin/staff/staff-table.tsx` — main list, desktop table + mobile cards
+  (matching the established pattern from Products/Inventory), inline role-change dropdown,
+  revoke/reactivate toggle
+- `components/admin/staff/create-staff-dialog.tsx` — add staff modal
+- `components/admin/staff/reset-password-dialog.tsx` — Super-Admin-sets-new-password modal
+  (not a self-service "forgot password" email flow — see Known Limitations)
+- `components/admin/staff/staff-activity-dialog.tsx` — recent `ActivityLog` entries for one
+  staff member, reusing the existing activity log rather than building a parallel one
+- `app/admin/staff/page.tsx` — breadcrumb + page-level Super Admin check (belt-and-suspenders
+  alongside the middleware fix below)
+
+### 2. Files Modified — real, pre-existing bug fixed
+
+- `middleware.ts` — **`SUPER_ADMIN_ONLY_PREFIXES` was checking bare `/settings` and `/staff`,
+  which never matched anything** — the real pages live under `/admin/settings` and
+  `/admin/staff`. This meant the Super-Admin-only route restriction silently never applied to
+  the actual Staff page. Found this while building the real page and confirmed it precisely
+  before fixing — not a guess. Fixed to check the real paths; simplified the route matcher
+  now that everything genuinely lives under `/admin/*` (the old config had separate
+  `/settings/:path*` and `/staff/:path*` matchers pointing at routes that never existed).
+- `components/admin/sidebar.tsx` — Settings/Staff nav links were pointing at `/settings` and
+  `/staff` (missing the `/admin` prefix every other nav item has). Fixed to `/admin/settings`
+  and `/admin/staff`. This bug is also *why* the middleware gap above never surfaced before —
+  the broken links meant nobody had actually navigated to a matching path yet to notice.
+
+### 3. Files Deleted
+
+None.
+
+### 4. Database Changes
+
+None.
+
+### 5. Environment Variable Changes
+
+None.
+
+### 6. Dependency Changes
+
+None — reuses `bcryptjs` (already a dependency, same hashing pattern as `auth.ts`/`seed.ts`).
+
+### 7. Testing Checklist
+
+**Manual tests to perform on your machine:**
+1. `npm run build`
+2. As Support Admin, try navigating directly to `/admin/staff` — confirm you're redirected to
+   the dashboard (this is the middleware fix actually being exercised — before this fix, a
+   Support Admin typing that URL in directly would **not** have been blocked)
+3. As Super Admin, open Staff — create a new account, confirm it appears in the list
+4. Try changing your own role away from Super Admin — confirm it's rejected
+5. Try revoking your own access — confirm it's rejected
+6. Create a second Super Admin (or use a test account), revoke it, confirm that account can no
+   longer log in; reactivate it, confirm login works again
+7. Reset a staff member's password, log out, log back in as them with the new password
+8. Open "Activity" for a staff member who's made recent product/inventory changes — confirm
+   those show up
+
+**Known limitations:**
+- Password reset is Super-Admin-direct-set only, not self-service "forgot password" via email.
+  Resend is already wired up elsewhere in this project and could support a token-based reset
+  flow later — flagging as a real future enhancement, not silently building a half version now.
+- Staff activity view shows the 50 most recent entries, no pagination — fine at current volume,
+  worth revisiting if staff accounts accumulate a lot of history.
+- Same Prisma-generation sandbox limitation as every prior batch — clean `next lint`,
+  `tsc --noEmit` at the same known count (17), nothing new.
+
+### 8. Suggested Git Commit Messages
+
+```
+fix(middleware): correct Super-Admin-only route prefixes to match real /admin/* paths
+
+fix(sidebar): correct Settings/Staff nav links to /admin/settings and /admin/staff
+
+feat(staff): validators and server actions for staff management (list/create/role/access/reset/activity)
+
+feat(staff): staff list UI with desktop table and mobile cards
+
+feat(staff): create staff, reset password, and activity dialogs
+
+feat(staff): Staff admin page with breadcrumb and page-level Super Admin guard
+```
+
+### 9. Documentation Updated
+
+None this batch.
+
+### 10. Upgrade Instructions
+
+1. Add the 7 new files; overwrite `middleware.ts` and `components/admin/sidebar.tsx`.
+2. `npm run build`
+3. Run through the manual testing checklist above — **items 2 is the important one**, since
+   it's confirming a real security-relevant bug fix, not just new functionality.
+4. Commit, push.
+
+---
+
 
 
 ## Milestone 1: Foundation & Auth

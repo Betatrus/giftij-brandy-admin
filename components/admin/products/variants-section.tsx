@@ -23,6 +23,7 @@ export function VariantsSection({ productId }: { productId?: string }) {
     control,
     watch,
     setValue,
+    register,
     formState: { errors },
   } = useFormContext<ProductInput>();
 
@@ -97,13 +98,38 @@ export function VariantsSection({ productId }: { productId?: string }) {
       </div>
 
       {!hasVariants && (
-        <p className="text-xs text-ink/40 font-body">
-          Off — this product uses a single price and stock count (set below in Logistics).
-        </p>
+        <div className="space-y-3">
+          <p className="text-xs text-ink/40 font-body">
+            Off — this product uses one stock count for the whole item.
+          </p>
+          {!productId ? (
+            <div>
+              <label className="font-body text-sm text-ink/70">Initial Stock</label>
+              <input
+                type="number"
+                {...register("initialStock")}
+                className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body max-w-[200px]"
+              />
+            </div>
+          ) : (
+            <p className="text-xs text-ink/50 font-body">
+              Stock is managed from the{" "}
+              <a href={`/admin/inventory#product-${productId}`} className="text-gold underline">
+                Inventory page
+              </a>
+              , not here.
+            </p>
+          )}
+        </div>
       )}
 
       {hasVariants && (
         <div className="space-y-4">
+          <p className="text-xs text-ink/50 font-body bg-champagne/20 border border-gold/20 rounded-xl px-3 py-2">
+            Stock will be managed per variant below — the product no longer has one combined
+            stock count.
+          </p>
+
           <div>
             <label className="font-body text-sm text-ink/70">Variant Type</label>
             <select
@@ -135,41 +161,46 @@ export function VariantsSection({ productId }: { productId?: string }) {
             )}
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="font-body text-sm text-ink/70">
-                {variantType || "Variant"} Values
-              </label>
-              <button
-                type="button"
-                onClick={() => append({ value: "", sku: "", stock: 0, status: "ACTIVE" })}
-                className="text-xs text-gold flex items-center gap-1"
-              >
-                <Plus size={14} /> Add {variantType || "variant"}
-              </button>
-            </div>
+          {/* Values only appear once a type is actually selected — picking
+              "has variants" alone isn't enough to start adding rows, since
+              a value with no declared meaning (no type) isn't useful. */}
+          {!!variantType && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="font-body text-sm text-ink/70">
+                  {variantType} Values
+                </label>
+                <button
+                  type="button"
+                  onClick={() => append({ value: "", sku: "", stock: 0, status: "ACTIVE" })}
+                  className="text-xs text-gold flex items-center gap-1"
+                >
+                  <Plus size={14} /> Add {variantType}
+                </button>
+              </div>
 
-            {fields.length === 0 && (
-              <p className="text-xs text-ink/40 font-body mb-2">
-                No values yet — add at least one (e.g. &quot;Black&quot;, &quot;42&quot;).
-              </p>
-            )}
-            {errors.variants && typeof errors.variants.message === "string" && (
-              <p className="text-xs text-red-600 mb-2">{errors.variants.message}</p>
-            )}
+              {fields.length === 0 && (
+                <p className="text-xs text-ink/40 font-body mb-2">
+                  No values yet — add at least one (e.g. &quot;Black&quot;, &quot;42&quot;).
+                </p>
+              )}
+              {errors.variants && typeof errors.variants.message === "string" && (
+                <p className="text-xs text-red-600 mb-2">{errors.variants.message}</p>
+              )}
 
-            <div className="space-y-3">
-              {fields.map((field, index) => (
-                <VariantRow
-                  key={field.id}
-                  index={index}
-                  productId={productId}
-                  variantId={variants?.[index]?.id}
-                  onRemove={() => remove(index)}
-                />
-              ))}
+              <div className="space-y-3">
+                {fields.map((field, index) => (
+                  <VariantRow
+                    key={field.id}
+                    index={index}
+                    productId={productId}
+                    variantId={variants?.[index]?.id}
+                    onRemove={() => remove(index)}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 

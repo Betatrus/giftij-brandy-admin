@@ -36,8 +36,8 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Communications", href: "/admin/communications", icon: MessageSquare },
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { label: "Reports", href: "/admin/reports", icon: FileText },
-  { label: "Settings", href: "/settings", icon: Settings, superAdminOnly: true },
-  { label: "Staff", href: "/staff", icon: UserCog, superAdminOnly: true },
+  { label: "Settings", href: "/admin/settings", icon: Settings, superAdminOnly: true },
+  { label: "Staff", href: "/admin/staff", icon: UserCog, superAdminOnly: true },
 ];
 
 /**

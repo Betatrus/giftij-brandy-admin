@@ -12,7 +12,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
-    "prisma:backfill-batch1": "tsx prisma/backfill-batch1.ts"
+    "prisma:backfill-batch1": "tsx prisma/backfill-batch1.ts",
+    "prisma:seed-categories": "tsx prisma/seed-categories.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",

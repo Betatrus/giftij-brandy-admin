@@ -1,10 +1,11 @@
 "use client";
 
-import { useForm, FormProvider } from "react-hook-form";
+import { useForm, FormProvider, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { StaffRole } from "@prisma/client";
+import { X } from "lucide-react";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { createProduct, updateProduct } from "@/lib/actions/products";
 import { SpecEditor } from "./spec-editor";
@@ -16,6 +17,67 @@ import { useUnsavedChanges } from "@/lib/context/unsaved-changes-context";
 
 type ExistingImage = { id: string; url: string; sortOrder: number };
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
+
+/** Comma or Enter adds a tag chip; each chip has its own remove button. */
+function TagsInput({ control }: { control: ReturnType<typeof useForm<ProductInput>>["control"] }) {
+  const [draft, setDraft] = useState("");
+
+  return (
+    <Controller
+      control={control}
+      name="tags"
+      render={({ field }) => {
+        function addTag(raw: string) {
+          const value = raw.trim();
+          if (!value) return;
+          const existing = field.value ?? [];
+          if (!existing.includes(value)) field.onChange([...existing, value]);
+          setDraft("");
+        }
+
+        return (
+          <div>
+            <label className="font-body text-sm text-ink/70">Tags</label>
+            <p className="text-xs text-ink/40 font-body mb-1">
+              Helps customers find this product through search — e.g. &quot;leather&quot;, &quot;everyday&quot;.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-2">
+              {(field.value ?? []).map((tag) => (
+                <span
+                  key={tag}
+                  className="flex items-center gap-1 bg-champagne/30 border border-gold/30 text-ink text-xs font-body px-2.5 py-1 rounded-full"
+                >
+                  {tag}
+                  <button
+                    type="button"
+                    onClick={() => field.onChange((field.value ?? []).filter((t) => t !== tag))}
+                    className="text-ink/40 hover:text-ink"
+                    aria-label={`Remove tag ${tag}`}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === ",") {
+                  e.preventDefault();
+                  addTag(draft);
+                }
+              }}
+              onBlur={() => addTag(draft)}
+              placeholder="Type a tag and press Enter..."
+              className="w-full rounded-xl border border-cream px-3 py-2 font-body"
+            />
+          </div>
+        );
+      }}
+    />
+  );
+}
 
 export function ProductForm({
   role,
@@ -56,11 +118,9 @@ export function ProductForm({
   const {
     register,
     handleSubmit,
-    watch,
     formState: { errors, isDirty },
   } = form;
 
-  const hasVariants = watch("hasVariants");
   const { setDirty } = useUnsavedChanges();
 
   // Feeds the shared context so the sidebar, breadcrumbs, and back link
@@ -102,15 +162,19 @@ export function ProductForm({
     }
   }
 
+  const saveLabel = saving ? "Saving..." : productId ? "Save Changes" : "Create Product";
+
   return (
     <FormProvider {...form}>
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-8 max-w-3xl">
+      {/* pb-24 on mobile only clears the sticky action bar at the bottom;
+          desktop (md:pb-0) is untouched since it has no sticky bar. */}
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 md:space-y-8 max-w-3xl pb-24 md:pb-0">
         {serverError && (
           <div className="bg-red-50 text-red-700 text-sm font-body rounded-xl px-4 py-3">{serverError}</div>
         )}
 
-        {/* Core details */}
-        <section className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
+        {/* Core Details */}
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
           <h2 className="font-display text-lg text-ink">Core Details</h2>
 
           <div>
@@ -139,6 +203,11 @@ export function ProductForm({
 
           <CategorySelect categories={categories} />
 
+          <div>
+            <label className="font-body text-sm text-ink/70">Brand</label>
+            <input {...register("brand")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="font-body text-sm text-ink/70">SKU</label>
@@ -152,7 +221,7 @@ export function ProductForm({
         </section>
 
         {/* Pricing */}
-        <section className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
           <h2 className="font-display text-lg text-ink">Pricing</h2>
           <p className="text-xs text-ink/40 font-body -mt-2">
             One price for the whole product — all variants (if any) share it.
@@ -183,19 +252,30 @@ export function ProductForm({
               <input type="number" step="0.01" {...register("discount")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
             </div>
             <div>
-              <label className="font-body text-sm text-ink/70">Status</label>
-              <select {...register("status")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body">
-                <option value="DRAFT">Draft</option>
-                <option value="ACTIVE">Active</option>
-                <option value="ARCHIVED">Archived</option>
-              </select>
+              <label className="font-body text-sm text-ink/70">Currency</label>
+              <input {...register("currency")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+            </div>
+          </div>
+
+          <div>
+            <label className="font-body text-sm text-ink/70">Status</label>
+            <div className="flex flex-wrap gap-3 mt-1">
+              {(["DRAFT", "ACTIVE", "ARCHIVED"] as const).map((s) => (
+                <label
+                  key={s}
+                  className="flex items-center gap-2 rounded-xl border border-cream px-3 py-2 text-sm font-body cursor-pointer has-[:checked]:border-gold has-[:checked]:bg-champagne/30"
+                >
+                  <input type="radio" value={s} {...register("status")} />
+                  {s === "DRAFT" ? "Draft" : s === "ACTIVE" ? "Active" : "Archived"}
+                </label>
+              ))}
             </div>
           </div>
         </section>
 
-        {/* Logistics */}
-        <section className="bg-white rounded-2xl shadow-soft p-6 space-y-4">
-          <h2 className="font-display text-lg text-ink">Logistics & SEO</h2>
+        {/* Product Specifications */}
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
+          <h2 className="font-display text-lg text-ink">Product Specifications</h2>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="font-body text-sm text-ink/70">Weight (kg)</label>
@@ -209,37 +289,40 @@ export function ProductForm({
               <label className="font-body text-sm text-ink/70">Warranty</label>
               <input {...register("warranty")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
             </div>
-            {!productId && !hasVariants && (
-              <div>
-                <label className="font-body text-sm text-ink/70">Initial Stock</label>
-                <input type="number" {...register("initialStock")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-              </div>
-            )}
-            <div>
-              <label className="font-body text-sm text-ink/70">SEO Title</label>
-              <input {...register("seoTitle")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
-            <div>
-              <label className="font-body text-sm text-ink/70">SEO Description</label>
-              <input {...register("seoDescription")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
           </div>
+
+          <TagsInput control={form.control} />
         </section>
 
-        <section className="bg-white rounded-2xl shadow-soft p-6">
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
           <SpecEditor control={form.control} register={register} />
         </section>
 
-        <section className="bg-white rounded-2xl shadow-soft p-6">
+        {/* Variants / Inventory, then Homepage Placement, then SEO — matching the requested flow order */}
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
           <VariantsSection productId={productId} />
         </section>
 
-        <section className="bg-white rounded-2xl shadow-soft p-6">
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
           <FeaturedToggles control={form.control} />
         </section>
 
+        {/* SEO — standalone, separate from Specifications/Logistics */}
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
+          <h2 className="font-display text-lg text-ink">SEO</h2>
+          <p className="text-xs text-ink/40 font-body -mt-2">Both optional.</p>
+          <div>
+            <label className="font-body text-sm text-ink/70">SEO Title</label>
+            <input {...register("seoTitle")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+          </div>
+          <div>
+            <label className="font-body text-sm text-ink/70">SEO Description</label>
+            <input {...register("seoDescription")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+          </div>
+        </section>
+
         {productId && (
-          <section className="bg-white rounded-2xl shadow-soft p-6">
+          <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
             <ImageUploader productId={productId} initialImages={existingImages ?? []} />
           </section>
         )}
@@ -250,16 +333,33 @@ export function ProductForm({
           </p>
         )}
 
-        <div className="flex justify-end">
+        {/* Desktop: inline button, unchanged. Mobile: hidden here, shown in the sticky bar below instead. */}
+        <div className="hidden md:flex justify-end">
           <button
             type="submit"
             disabled={saving}
             className="rounded-xl bg-gold text-white font-body px-6 py-2.5 disabled:opacity-60"
           >
-            {saving ? "Saving..." : productId ? "Save Changes" : "Create Product"}
+            {saveLabel}
           </button>
         </div>
       </form>
+
+      {/* Sticky mobile action bar — always visible, no scrolling required to
+          save. This button lives outside the <form> element (it has to, to
+          be fixed-positioned against the viewport rather than scrolling
+          with the form content), so it can't rely on native type="submit"
+          form association — it invokes the same submit handler directly. */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-cream p-3">
+        <button
+          type="button"
+          onClick={handleSubmit(onSubmit)}
+          disabled={saving}
+          className="w-full rounded-xl bg-gold text-white font-body px-6 py-3 disabled:opacity-60"
+        >
+          {saveLabel}
+        </button>
+      </div>
     </FormProvider>
   );
 }

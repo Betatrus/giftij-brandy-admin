@@ -3,12 +3,16 @@ import { NextResponse } from "next/server";
 
 // Paths only a Super Admin may even load — Support Admin is redirected,
 // not just visually blocked, so there's no client-side data flash.
-const SUPER_ADMIN_ONLY_PREFIXES = ["/settings", "/staff"];
+// Previously this checked bare "/settings" and "/staff", which never
+// matched anything — the real pages live under "/admin/settings" and
+// "/admin/staff". That meant this restriction silently never applied to
+// the actual Staff page. Fixed to match the real paths.
+const SUPER_ADMIN_ONLY_PREFIXES = ["/admin/settings", "/admin/staff"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
   const isLoggedIn = !!req.auth;
-  const isAdminRoute = pathname.startsWith("/admin") || pathname.startsWith("/settings") || pathname.startsWith("/staff");
+  const isAdminRoute = pathname.startsWith("/admin");
 
   if (!isAdminRoute) return NextResponse.next();
 
@@ -29,5 +33,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/admin/:path*", "/settings/:path*", "/staff/:path*"],
+  matcher: ["/admin/:path*"],
 };
