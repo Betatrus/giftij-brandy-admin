@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { computeEffectivePrice } from "@/lib/pricing/effective-price";
 
 /**
  * These select clauses are the enforcement point for "financial fields are
@@ -133,6 +134,12 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
     categories: row.categories,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
+    // Precomputed via the SAME helper the Paystack webhook uses to set
+    // OrderItem.unitPrice (lib/pricing/effective-price.ts) — so what the
+    // storefront displays as the selling price and what actually gets
+    // charged can never drift apart. `price` above remains the
+    // "crossed-out" listed price for the storefront to show alongside it.
+    discountedPrice: computeEffectivePrice(toNumber(row.price), row.discount ? toNumber(row.discount) : 0),
     currency: row.currency,
     coverImage: cover?.url ?? null,
     images: row.images.map((i) => i.url),
@@ -156,6 +163,7 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     brand: row.brand,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
+    discountedPrice: computeEffectivePrice(toNumber(row.price), row.discount ? toNumber(row.discount) : 0),
     currency: row.currency,
     weight: row.weight,
     dimensions: row.dimensions,

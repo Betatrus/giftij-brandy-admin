@@ -25,3 +25,25 @@ export function serializeProduct<T extends Record<string, unknown>>(product: T) 
 export function serializeProducts<T extends Record<string, unknown>>(products: T[]) {
   return products.map(serializeProduct);
 }
+
+/**
+ * Same idea as serializeProduct, for an Order's Decimal fields (subtotal,
+ * profit) and its items' unitPrice. Run AFTER stripFinancialFields() so
+ * `profit` is simply absent for a Support Admin rather than serialized
+ * to 0 (which would look like a real, deliberate zero-profit order).
+ */
+export function serializeOrder<T extends Record<string, unknown>>(order: T) {
+  const items = Array.isArray(order.items)
+    ? (order.items as Record<string, unknown>[]).map((item) => ({
+        ...item,
+        unitPrice: "unitPrice" in item ? toNum(item.unitPrice as Decimal) : undefined,
+      }))
+    : order.items;
+
+  return {
+    ...order,
+    subtotal: "subtotal" in order ? toNum(order.subtotal as Decimal) : undefined,
+    profit: "profit" in order ? toNum(order.profit as Decimal | null) : undefined,
+    items,
+  };
+}

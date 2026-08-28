@@ -20,7 +20,8 @@ export default async function NewProductPage() {
       <BackLink href="/admin/products" label="Back to Products" />
       <h1 className="font-display text-2xl text-ink mb-1">New Product</h1>
       <p className="font-body text-sm text-ink/50 mb-6">
-        Save the product to unlock image uploads and variants.
+        Choose a category, fill in the details, and add photos — you'll review everything
+        before the product goes live.
       </p>
       <ProductForm role={session!.user.role} categories={categories} />
     </div>

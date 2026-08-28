@@ -7,8 +7,10 @@ import { hasPermission, stripFinancialFields, stripFinancialFieldsFromList } fro
 import { logActivity } from "@/lib/activity-log";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { getPagination, getPageCount, DEFAULT_PAGE_SIZE } from "@/lib/utils/pagination";
-import { generateUniqueSlug, generateUniqueSku } from "@/lib/utils/slug";
+import { generateUniqueSlug, generateUniqueSku, slugify } from "@/lib/utils/slug";
 import { assertValidProductTransition } from "@/lib/utils/product-lifecycle";
+import { assertBestSellerCapAllows, getBestSellerCategorySlug } from "@/lib/best-sellers/enforce-cap";
+import { BEST_SELLER_FLAG } from "@/lib/constants/best-sellers";
 import { revalidatePath, revalidateTag } from "next/cache";
 
 async function requireSession() {
@@ -22,6 +24,38 @@ async function slugExists(candidate: string, excludeId?: string) {
   return !!existing && existing.id !== excludeId;
 }
 
+// The admin never types a SKU (see lib/validators/product.ts) — this
+// derives a readable one from the product's slug, e.g. slug
+// "classic-black-tote" -> base "GB-CLASSIC-BLACK-TOTE", then
+// generateUniqueSku appends -2/-3/... on collision.
+async function autoProductSku(slug: string) {
+  const base = `GB-${slug.toUpperCase().replace(/-/g, "-")}`;
+  return generateUniqueSku(base, async (candidate) => {
+    const existing = await prisma.product.findUnique({ where: { sku: candidate } });
+    return !!existing;
+  });
+}
+
+// Same idea for a variant: derived from the PRODUCT's sku + the variant's
+// own value, e.g. product SKU "GB-CLASSIC-TOTE" + value "Black / 42" ->
+// base "GB-CLASSIC-TOTE-BLACK-42".
+async function autoVariantSku(productSku: string, value: string) {
+  const base = `${productSku}-${slugify(value).toUpperCase()}`;
+  return generateUniqueSku(base, async (candidate) => {
+    const existing = await prisma.productVariant.findUnique({ where: { sku: candidate } });
+    return !!existing;
+  });
+}
+
+// The database still requires a short description (see Product.shortDesc
+// in prisma/schema.prisma); the form no longer collects one (see
+// lib/validators/product.ts), so this derives a reasonable one from the
+// full description when the admin hasn't supplied it.
+function autoShortDesc(fullDesc: string) {
+  const collapsed = fullDesc.replace(/\s+/g, " ").trim();
+  return collapsed.length <= 160 ? collapsed : `${collapsed.slice(0, 157).trimEnd()}...`;
+}
+
 // ------------------------------------------------------------------
 // CREATE
 // ------------------------------------------------------------------
@@ -33,9 +67,24 @@ export async function createProduct(input: ProductInput) {
 
   const parsed = productSchema.parse(input);
 
+  // Best Sellers cap enforcement — see lib/best-sellers/enforce-cap.ts.
+  // A brand-new product can never have already been a Best Seller, so any
+  // "best_sellers" flag here is always a new addition and always needs
+  // the check (unlike updateProduct, which only checks on a transition).
+  if (parsed.featuredFlags.includes(BEST_SELLER_FLAG)) {
+    const categorySlug = await getBestSellerCategorySlug(parsed.categoryIds);
+    if (!categorySlug) {
+      throw new Error("This product isn't in Bags, Shoes, or Slippers — Best Sellers only applies to those three categories.");
+    }
+    await assertBestSellerCapAllows(categorySlug);
+  }
+
   const slug = parsed.slug?.trim()
     ? parsed.slug.trim()
     : await generateUniqueSlug(parsed.name, (candidate) => slugExists(candidate));
+
+  const sku = parsed.sku?.trim() ? parsed.sku.trim() : await autoProductSku(slug);
+  const shortDesc = parsed.shortDesc?.trim() ? parsed.shortDesc.trim() : autoShortDesc(parsed.fullDesc);
 
   // Support Admin can still submit a costPrice field from a stale form,
   // but we only ever trust it if the role can actually see financials.
@@ -43,15 +92,24 @@ export async function createProduct(input: ProductInput) {
     ? parsed.costPrice
     : 0;
 
+  const variantCreates = await Promise.all(
+    parsed.variants.map(async (v) => ({
+      value: v.value,
+      sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, v.value),
+      currentStock: v.stock,
+      status: v.status,
+    }))
+  );
+
   const product = await prisma.product.create({
     data: {
       name: parsed.name,
       slug,
-      shortDesc: parsed.shortDesc,
+      shortDesc,
       fullDesc: parsed.fullDesc,
       categories: { connect: parsed.categoryIds.map((id) => ({ id })) },
       brand: parsed.brand,
-      sku: parsed.sku,
+      sku,
       barcode: parsed.barcode ?? null,
       price: parsed.price,
       costPrice,
@@ -69,16 +127,7 @@ export async function createProduct(input: ProductInput) {
       // Admin-defined variant type — a plain string, whatever the admin
       // picked (a preset like "Colour"/"Size" or a custom "Other" value).
       variantType: parsed.hasVariants ? parsed.variantType : null,
-      variants: parsed.hasVariants
-        ? {
-            create: parsed.variants.map((v) => ({
-              value: v.value,
-              sku: v.sku,
-              currentStock: v.stock,
-              status: v.status,
-            })),
-          }
-        : undefined,
+      variants: parsed.hasVariants ? { create: variantCreates } : undefined,
       // Base Inventory only created when the product has NO variants —
       // when it does, each variant tracks its own stock instead (see
       // ProductVariant.currentStock and lib/actions/inventory.ts's
@@ -102,7 +151,12 @@ export async function createProduct(input: ProductInput) {
   revalidatePath("/admin/dashboard");
   revalidateTag("products");
 
-  return product.id;
+  // Returns the created variants too (id + value), not just the product
+  // id — the product form needs this to know which real variant IDs were
+  // just created for each colour, so staged variant photos (selected
+  // before the product existed) can be uploaded and associated correctly
+  // right after creation. See product-form.tsx's onSubmit.
+  return { id: product.id, variants: product.variants.map((v) => ({ id: v.id, value: v.value })) };
 }
 
 // ------------------------------------------------------------------
@@ -122,6 +176,24 @@ export async function updateProduct(id: string, input: ProductInput) {
   // Explicit lifecycle enforcement — not just "accept whatever status was submitted."
   assertValidProductTransition(existing.status, parsed.status as ProductStatus);
 
+  // Best Sellers cap enforcement — see lib/best-sellers/enforce-cap.ts for
+  // why this can't just live in the dedicated picker's toggleBestSeller()
+  // alone: this form's Homepage Placement checkboxes (featuredTogges.tsx)
+  // are a second code path that can set featuredFlags to include
+  // "best_sellers", and the validator alone doesn't know about the cap.
+  // Only checked on a NEW addition (wasn't already selected) — a product
+  // that's already a Best Seller can be re-saved with unrelated changes
+  // without tripping over its own existing selection.
+  const wasBestSeller = existing.featuredFlags.includes(BEST_SELLER_FLAG);
+  const willBeBestSeller = parsed.featuredFlags.includes(BEST_SELLER_FLAG);
+  if (willBeBestSeller && !wasBestSeller) {
+    const categorySlug = await getBestSellerCategorySlug(parsed.categoryIds);
+    if (!categorySlug) {
+      throw new Error("This product isn't in Bags, Shoes, or Slippers — Best Sellers only applies to those three categories.");
+    }
+    await assertBestSellerCapAllows(categorySlug, id);
+  }
+
   const slug = parsed.slug?.trim()
     ? parsed.slug.trim()
     : existing.slug; // keep the existing slug if the form didn't change it
@@ -129,6 +201,13 @@ export async function updateProduct(id: string, input: ProductInput) {
   if (slug !== existing.slug && (await slugExists(slug, id))) {
     throw new Error(`Slug "${slug}" is already in use by another product.`);
   }
+
+  // Neither field has a form input anymore (see lib/validators/product.ts)
+  // — a hidden RHF field carries the existing value forward on every
+  // save, so these fallbacks are a safety net (e.g. a legacy product that
+  // somehow has neither) rather than the normal path.
+  const sku = parsed.sku?.trim() ? parsed.sku.trim() : existing.sku;
+  const shortDesc = parsed.shortDesc?.trim() ? parsed.shortDesc.trim() : autoShortDesc(parsed.fullDesc);
 
   // Removing a variant — whether one row at a time or by turning off
   // "Has Variants" entirely — ARCHIVES it rather than deleting it.
@@ -152,11 +231,11 @@ export async function updateProduct(id: string, input: ProductInput) {
       data: {
         name: parsed.name,
         slug,
-        shortDesc: parsed.shortDesc,
+        shortDesc,
         fullDesc: parsed.fullDesc,
         categories: { set: parsed.categoryIds.map((catId) => ({ id: catId })) },
         brand: parsed.brand,
-        sku: parsed.sku,
+        sku,
         barcode: parsed.barcode ?? null,
         price: parsed.price,
         costPrice: canEditFinancials ? parsed.costPrice : existing.costPrice,
@@ -210,16 +289,19 @@ export async function updateProduct(id: string, input: ProductInput) {
           // there's always exactly one code path that mutates stock and
           // always writes a VariantInventoryLog entry. Editing the
           // product form should never silently change stock levels.
+          // sku also isn't touched on an existing row — it was already
+          // auto-generated once at creation and shouldn't shift under a
+          // variant that may already be referenced by past OrderItems.
           await tx.productVariant.update({
             where: { id: v.id },
-            data: { value: v.value, sku: v.sku, status: v.status },
+            data: { value: v.value, status: v.status },
           });
         } else {
           await tx.productVariant.create({
             data: {
               productId: id,
               value: v.value,
-              sku: v.sku,
+              sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, v.value),
               currentStock: v.stock,
               status: v.status,
             },
@@ -446,7 +528,7 @@ export async function listProducts(params: {
         inventory: true,
         variants: {
           where: { status: { not: "ARCHIVED" } },
-          select: { id: true, currentStock: true, lowStockThreshold: true },
+          select: { id: true, currentStock: true, soldStock: true, lowStockThreshold: true },
         },
         images: { orderBy: { sortOrder: "asc" }, take: 1 },
         categories: { select: { id: true, name: true, slug: true } },

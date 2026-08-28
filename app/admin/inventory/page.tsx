@@ -1,8 +1,11 @@
 import { Suspense } from "react";
 import { InventoryTable } from "@/components/admin/inventory/inventory-table";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
+import { listCategoriesFlat } from "@/lib/actions/categories";
 
-export default function InventoryPage() {
+export default async function InventoryPage() {
+  const categories = await listCategoriesFlat();
+
   return (
     <div>
       <Breadcrumbs items={[{ label: "Home", href: "/admin/dashboard" }, { label: "Inventory" }]} />
@@ -11,7 +14,7 @@ export default function InventoryPage() {
         Track stock levels and adjust quantities as items move in and out of the warehouse.
       </p>
       <Suspense fallback={<p className="font-body text-sm text-ink/40">Loading inventory...</p>}>
-        <InventoryTable />
+        <InventoryTable categories={categories} />
       </Suspense>
     </div>
   );

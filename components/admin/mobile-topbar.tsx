@@ -1,6 +1,7 @@
 "use client";
 
-import { Menu, Bell } from "lucide-react";
+import { Menu } from "lucide-react";
+import { NotificationBell } from "./notification-bell";
 
 function initials(name: string): string {
   return name
@@ -27,10 +28,7 @@ export function MobileTopBar({
       <span className="font-display text-base text-ink">Giftij Brandy Admin</span>
 
       <div className="flex items-center gap-3">
-        {/* Placeholder only — no notification system built yet */}
-        <button aria-label="Notifications" className="text-ink/40 p-1">
-          <Bell size={18} />
-        </button>
+        <NotificationBell />
         <div className="w-8 h-8 rounded-full bg-gold text-white font-body text-xs flex items-center justify-center">
           {initials(userName) || "?"}
         </div>

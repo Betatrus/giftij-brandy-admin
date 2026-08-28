@@ -7,8 +7,15 @@ import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { BackLink } from "@/components/ui/back-link";
 import type { ProductInput } from "@/lib/validators/product";
 
-export default async function EditProductPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EditProductPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ photosFailed?: string }>;
+}) {
   const { id } = await params;
+  const { photosFailed } = await searchParams;
   const session = await auth();
   const [raw, categories] = await Promise.all([getProduct(id), listCategoriesFlat()]);
   const product = serializeProduct(raw as unknown as Record<string, unknown>) as unknown as {
@@ -34,7 +41,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
     featuredFlags: string[];
     variantType: string | null;
     specs: { id: string; label: string; value: string }[];
-    variants: { id: string; value: string; sku: string; currentStock: number; status: string }[];
+    variants: { id: string; value: string; sku: string; currentStock: number; status: string; image: { url: string } | null }[];
     images: { id: string; url: string; sortOrder: number }[];
   };
 
@@ -68,6 +75,7 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
       sku: v.sku,
       stock: v.currentStock,
       status: v.status as "DRAFT" | "ACTIVE" | "ARCHIVED",
+      imageUrl: v.image?.url ?? null,
     })),
   };
 
@@ -88,6 +96,12 @@ export default async function EditProductPage({ params }: { params: Promise<{ id
         </a>
       </div>
       <p className="font-body text-sm text-ink/50 mb-6">{product.name}</p>
+      {photosFailed && Number(photosFailed) > 0 && (
+        <div className="mb-6 rounded-xl bg-amber-50 text-amber-800 text-sm font-body px-4 py-3">
+          Your product was created, but {photosFailed} photo{Number(photosFailed) === 1 ? "" : "s"}{" "}
+          didn't make it — please add {Number(photosFailed) === 1 ? "it" : "them"} again below.
+        </div>
+      )}
       <ProductForm
         role={session!.user.role}
         productId={id}

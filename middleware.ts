@@ -7,7 +7,12 @@ import { NextResponse } from "next/server";
 // matched anything — the real pages live under "/admin/settings" and
 // "/admin/staff". That meant this restriction silently never applied to
 // the actual Staff page. Fixed to match the real paths.
-const SUPER_ADMIN_ONLY_PREFIXES = ["/admin/settings", "/admin/staff"];
+// /admin/settings is deliberately NOT here — Support Admin needs access
+// too (their own password, and whatever they're permitted to see there);
+// the page component itself conditionally shows the Super-Admin-only
+// sections (WhatsApp config, Branding, Payments) rather than gating the
+// whole route.
+const SUPER_ADMIN_ONLY_PREFIXES = ["/admin/staff", "/admin/categories"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;

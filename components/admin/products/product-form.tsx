@@ -1,83 +1,22 @@
 "use client";
 
-import { useForm, FormProvider, Controller } from "react-hook-form";
+import { useForm, FormProvider } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { StaffRole } from "@prisma/client";
-import { X } from "lucide-react";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { createProduct, updateProduct } from "@/lib/actions/products";
-import { SpecEditor } from "./spec-editor";
+import { uploadProductImage, uploadVariantImage } from "@/lib/actions/media";
 import { VariantsSection } from "./variants-section";
-import { FeaturedToggles } from "./featured-toggles";
 import { ImageUploader } from "./image-uploader";
+import { StagedImagePicker, fileToBase64, type StagedImage } from "./staged-image-picker";
 import { CategorySelect } from "./category-select";
+import { ProductPreview } from "./product-preview";
 import { useUnsavedChanges } from "@/lib/context/unsaved-changes-context";
 
 type ExistingImage = { id: string; url: string; sortOrder: number };
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
-
-/** Comma or Enter adds a tag chip; each chip has its own remove button. */
-function TagsInput({ control }: { control: ReturnType<typeof useForm<ProductInput>>["control"] }) {
-  const [draft, setDraft] = useState("");
-
-  return (
-    <Controller
-      control={control}
-      name="tags"
-      render={({ field }) => {
-        function addTag(raw: string) {
-          const value = raw.trim();
-          if (!value) return;
-          const existing = field.value ?? [];
-          if (!existing.includes(value)) field.onChange([...existing, value]);
-          setDraft("");
-        }
-
-        return (
-          <div>
-            <label className="font-body text-sm text-ink/70">Tags</label>
-            <p className="text-xs text-ink/40 font-body mb-1">
-              Helps customers find this product through search — e.g. &quot;leather&quot;, &quot;everyday&quot;.
-            </p>
-            <div className="flex flex-wrap gap-2 mb-2">
-              {(field.value ?? []).map((tag) => (
-                <span
-                  key={tag}
-                  className="flex items-center gap-1 bg-champagne/30 border border-gold/30 text-ink text-xs font-body px-2.5 py-1 rounded-full"
-                >
-                  {tag}
-                  <button
-                    type="button"
-                    onClick={() => field.onChange((field.value ?? []).filter((t) => t !== tag))}
-                    className="text-ink/40 hover:text-ink"
-                    aria-label={`Remove tag ${tag}`}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-            </div>
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === ",") {
-                  e.preventDefault();
-                  addTag(draft);
-                }
-              }}
-              onBlur={() => addTag(draft)}
-              placeholder="Type a tag and press Enter..."
-              className="w-full rounded-xl border border-cream px-3 py-2 font-body"
-            />
-          </div>
-        );
-      }}
-    />
-  );
-}
 
 export function ProductForm({
   role,
@@ -96,6 +35,35 @@ export function ProductForm({
   const canSeeFinancials = role === "SUPER_ADMIN";
   const [serverError, setServerError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Two-step flow per the confirmed requirement: fill in details, review a
+  // customer-facing preview, THEN create. "Edit" from the preview just
+  // flips this back — nothing is lost, the form state underneath is
+  // untouched either way.
+  const [step, setStep] = useState<"form" | "preview">("form");
+  const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
+  // Keyed by COLOUR (see variant-image-slot.tsx's top comment for why
+  // colour, never the full "Colour / Size" combination). Only ever
+  // populated for a brand-new product — an existing product's variant
+  // images upload immediately on selection instead (VariantImageSlot's
+  // EDIT-mode path), so this stays empty whenever productId is set.
+  const [stagedVariantImages, setStagedVariantImages] = useState<Record<string, StagedImage>>({});
+
+  function handleStageVariantImage(color: string, file: File) {
+    setStagedVariantImages((prev) => {
+      const existing = prev[color];
+      if (existing) URL.revokeObjectURL(existing.previewUrl);
+      return {
+        ...prev,
+        [color]: { tempId: `${color}-${Date.now()}`, file, previewUrl: URL.createObjectURL(file) },
+      };
+    });
+  }
+
+  // Shown on the preview/creating screen while images upload right after
+  // creation succeeds — "a short delay of a few seconds is completely
+  // acceptable," per the confirmed flow, as long as it's ONE continuous
+  // process the admin doesn't have to leave and come back to.
+  const [uploadStatus, setUploadStatus] = useState<{ done: number; total: number } | null>(null);
 
   const form = useForm<ProductInput>({
     resolver: zodResolver(productSchema),
@@ -118,8 +86,13 @@ export function ProductForm({
   const {
     register,
     handleSubmit,
+    trigger,
+    getValues,
+    watch,
     formState: { errors, isDirty },
   } = form;
+
+  const hasVariants = watch("hasVariants");
 
   const { setDirty } = useUnsavedChanges();
 
@@ -142,6 +115,40 @@ export function ProductForm({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isDirty]);
 
+  // Moves from the form to the preview — only after every field passes
+  // validation, so the preview never shows a half-valid product. Nothing
+  // is saved yet; this is purely a client-side view switch. If
+  // validation fails, this must NEVER just silently do nothing — every
+  // field with a problem now shows its own message (see the Variants
+  // section and the Core Details/Pricing fields above), and this banner
+  // makes sure the admin notices something needs fixing at all, even if
+  // the invalid field is scrolled out of view.
+  async function handleGoToPreview() {
+    setServerError(null);
+    const valid = await trigger();
+    if (valid) {
+      setStep("preview");
+    } else {
+      setServerError("Please fix the highlighted fields below before continuing.");
+    }
+  }
+
+  // The ONLY place that actually creates/saves the product — reachable
+  // only from the preview screen's "Create Product"/"Save Changes"
+  // button, matching "Only after clicking Create Product should the
+  // product creation process execute."
+  //
+  // IMAGE FLOW (new products only): select photos locally -> preview ->
+  // Create Product -> product is created -> immediately, in this same
+  // action, each staged photo is sent to Cloudinary and attached to the
+  // brand-new product. The admin never has to leave this screen or come
+  // back later to add photos — the existing Cloudinary
+  // architecture/media actions are reused exactly as they are, just
+  // called automatically right here instead of requiring a manual
+  // second step. If a photo fails to upload, creation still succeeds
+  // (the product itself is never lost over a photo problem) and the
+  // admin lands on the edit page with a clear, specific warning — where
+  // the real ImageUploader is available to retry that exact photo.
   async function onSubmit(data: ProductInput) {
     setSaving(true);
     setServerError(null);
@@ -151,31 +158,112 @@ export function ProductForm({
         setDirty(false); // saved — no longer unsaved, don't prompt on the refresh below
         router.refresh();
       } else {
-        const id = await createProduct(data);
+        const created = await createProduct(data);
         setDirty(false); // saved — don't prompt on the redirect to the new product's edit page
-        router.push(`/admin/products/${id}/edit`);
+
+        // Build the full upload queue up front — general product photos
+        // AND staged variant photos (fanned out to every real variant ID
+        // sharing that colour, since ProductImage.variantId is 1:1 — see
+        // variant-image-slot.tsx's top comment) — so the progress
+        // indicator reflects everything that's about to happen, not
+        // just the general gallery.
+        type QueuedUpload = { kind: "product" } | { kind: "variant"; variantId: string };
+        const uploadQueue: { file: File; target: QueuedUpload }[] = [];
+
+        for (const staged of stagedImages) {
+          uploadQueue.push({ file: staged.file, target: { kind: "product" } });
+        }
+        for (const [color, staged] of Object.entries(stagedVariantImages)) {
+          const variantIdsForColor = created.variants
+            .filter((v) => v.value === color || v.value.startsWith(`${color} / `))
+            .map((v) => v.id);
+          for (const variantId of variantIdsForColor) {
+            uploadQueue.push({ file: staged.file, target: { kind: "variant", variantId } });
+          }
+        }
+
+        let failedCount = 0;
+        if (uploadQueue.length > 0) {
+          setUploadStatus({ done: 0, total: uploadQueue.length });
+          for (let i = 0; i < uploadQueue.length; i++) {
+            try {
+              const base64 = await fileToBase64(uploadQueue[i].file);
+              const target = uploadQueue[i].target;
+              if (target.kind === "product") {
+                await uploadProductImage({ productId: created.id, fileBase64: base64 });
+              } else {
+                await uploadVariantImage({ variantId: target.variantId, productId: created.id, fileBase64: base64 });
+              }
+            } catch {
+              failedCount++;
+            }
+            setUploadStatus({ done: i + 1, total: uploadQueue.length });
+          }
+        }
+
+        router.push(
+          `/admin/products/${created.id}/edit${failedCount > 0 ? `?photosFailed=${failedCount}` : ""}`
+        );
       }
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      setStep("form"); // a save failure (e.g. Best Sellers cap, slug taken) needs the admin back in the editable form to fix it
     } finally {
       setSaving(false);
+      setUploadStatus(null);
     }
   }
 
-  const saveLabel = saving ? "Saving..." : productId ? "Save Changes" : "Create Product";
+  const saveLabel = saving
+    ? uploadStatus
+      ? `Adding photos (${uploadStatus.done}/${uploadStatus.total})...`
+      : "Saving..."
+    : productId
+    ? "Save Changes"
+    : "Create Product";
+
+  if (step === "preview") {
+    return (
+      <ProductPreview
+        values={getValues()}
+        categories={categories}
+        existingImages={existingImages}
+        stagedImages={stagedImages}
+        isEditing={!!productId}
+        saving={saving}
+        saveLabel={saveLabel}
+        serverError={serverError}
+        onEdit={() => setStep("form")}
+        onConfirm={handleSubmit(onSubmit)}
+      />
+    );
+  }
 
   return (
     <FormProvider {...form}>
       {/* pb-24 on mobile only clears the sticky action bar at the bottom;
           desktop (md:pb-0) is untouched since it has no sticky bar. */}
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 md:space-y-8 max-w-3xl pb-24 md:pb-0">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleGoToPreview();
+        }}
+        className="space-y-6 md:space-y-8 max-w-3xl pb-24 md:pb-0"
+      >
         {serverError && (
           <div className="bg-red-50 text-red-700 text-sm font-body rounded-xl px-4 py-3">{serverError}</div>
         )}
 
-        {/* Core Details */}
+        {/* Category comes FIRST — it decides how the Variants section below
+            behaves (Bags = color only, Shoes/Slippers = color/size), so the
+            admin picks it before anything variant-related can make sense. */}
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
-          <h2 className="font-display text-lg text-ink">Core Details</h2>
+          <h2 className="font-display text-lg text-ink">What kind of product is this?</h2>
+          <CategorySelect categories={categories} />
+        </section>
+
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
+          <h2 className="font-display text-lg text-ink">Product Details</h2>
 
           <div>
             <label className="font-body text-sm text-ink/70">Product Name</label>
@@ -185,38 +273,16 @@ export function ProductForm({
 
           <div>
             <label className="font-body text-sm text-ink/70">
-              URL Slug <span className="text-ink/40">(leave blank to auto-generate from name)</span>
+              URL Slug <span className="text-ink/40">(leave blank to auto-generate from the name)</span>
             </label>
             <input {...register("slug")} placeholder="e.g. the-adaeze-tote" className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
             {errors.slug && <p className="text-xs text-red-600 mt-1">{errors.slug.message}</p>}
           </div>
 
           <div>
-            <label className="font-body text-sm text-ink/70">Short Description</label>
-            <input {...register("shortDesc")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-          </div>
-
-          <div>
-            <label className="font-body text-sm text-ink/70">Full Description</label>
+            <label className="font-body text-sm text-ink/70">Description</label>
             <textarea {...register("fullDesc")} rows={4} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-          </div>
-
-          <CategorySelect categories={categories} />
-
-          <div>
-            <label className="font-body text-sm text-ink/70">Brand</label>
-            <input {...register("brand")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="font-body text-sm text-ink/70">SKU</label>
-              <input {...register("sku")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
-            <div>
-              <label className="font-body text-sm text-ink/70">Barcode</label>
-              <input {...register("barcode")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
+            {errors.fullDesc && <p className="text-xs text-red-600 mt-1">{errors.fullDesc.message}</p>}
           </div>
         </section>
 
@@ -224,7 +290,7 @@ export function ProductForm({
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
           <h2 className="font-display text-lg text-ink">Pricing</h2>
           <p className="text-xs text-ink/40 font-body -mt-2">
-            One price for the whole product — all variants (if any) share it.
+            One price for the whole product — every colour/size (if any) sells at this same price.
           </p>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -250,6 +316,9 @@ export function ProductForm({
             <div>
               <label className="font-body text-sm text-ink/70">Discount (%)</label>
               <input type="number" step="0.01" {...register("discount")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+              <p className="text-[11px] text-ink/40 font-body mt-1">
+                Customers will see the discounted price automatically — no need to change the price above.
+              </p>
             </div>
             <div>
               <label className="font-body text-sm text-ink/70">Currency</label>
@@ -266,98 +335,63 @@ export function ProductForm({
                   className="flex items-center gap-2 rounded-xl border border-cream px-3 py-2 text-sm font-body cursor-pointer has-[:checked]:border-gold has-[:checked]:bg-champagne/30"
                 >
                   <input type="radio" value={s} {...register("status")} />
-                  {s === "DRAFT" ? "Draft" : s === "ACTIVE" ? "Active" : "Archived"}
+                  {s === "DRAFT" ? "Draft (hidden from customers)" : s === "ACTIVE" ? "Active (visible to customers)" : "Archived"}
                 </label>
               ))}
             </div>
           </div>
         </section>
 
-        {/* Product Specifications */}
+        {/* Variants — category-aware (Bags = colour only, Shoes/Slippers = colour and/or size). */}
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
+          <VariantsSection
+            productId={productId}
+            categories={categories}
+            stagedVariantImages={stagedVariantImages}
+            onStageVariantImage={handleStageVariantImage}
+          />
+        </section>
+
+        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
+          {productId ? (
+            <ImageUploader productId={productId} initialImages={existingImages ?? []} hasVariants={hasVariants} />
+          ) : (
+            <StagedImagePicker files={stagedImages} onFilesChange={setStagedImages} hasVariants={hasVariants} />
+          )}
+        </section>
+
+        {/* SEO — standalone, both fields optional, kept because it genuinely helps the admin (search visibility), not decorative */}
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
-          <h2 className="font-display text-lg text-ink">Product Specifications</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="font-body text-sm text-ink/70">Weight (kg)</label>
-              <input type="number" step="0.01" {...register("weight")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
-            <div>
-              <label className="font-body text-sm text-ink/70">Dimensions</label>
-              <input {...register("dimensions")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
-            <div>
-              <label className="font-body text-sm text-ink/70">Warranty</label>
-              <input {...register("warranty")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
-            </div>
-          </div>
-
-          <TagsInput control={form.control} />
-        </section>
-
-        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
-          <SpecEditor control={form.control} register={register} />
-        </section>
-
-        {/* Variants / Inventory, then Homepage Placement, then SEO — matching the requested flow order */}
-        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
-          <VariantsSection productId={productId} />
-        </section>
-
-        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
-          <FeaturedToggles control={form.control} />
-        </section>
-
-        {/* SEO — standalone, separate from Specifications/Logistics */}
-        <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
-          <h2 className="font-display text-lg text-ink">SEO</h2>
-          <p className="text-xs text-ink/40 font-body -mt-2">Both optional.</p>
+          <h2 className="font-display text-lg text-ink">Search Visibility</h2>
+          <p className="text-xs text-ink/40 font-body -mt-2">
+            Optional — helps customers find this product through Google search.
+          </p>
           <div>
-            <label className="font-body text-sm text-ink/70">SEO Title</label>
+            <label className="font-body text-sm text-ink/70">Search Title</label>
             <input {...register("seoTitle")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
           </div>
           <div>
-            <label className="font-body text-sm text-ink/70">SEO Description</label>
+            <label className="font-body text-sm text-ink/70">Search Description</label>
             <input {...register("seoDescription")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
           </div>
         </section>
 
-        {productId && (
-          <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
-            <ImageUploader productId={productId} initialImages={existingImages ?? []} />
-          </section>
-        )}
-
-        {!productId && (
-          <p className="text-xs text-ink/40 font-body">
-            Save the product first to unlock image upload — Cloudinary needs a product to attach images to.
-          </p>
-        )}
-
         {/* Desktop: inline button, unchanged. Mobile: hidden here, shown in the sticky bar below instead. */}
         <div className="hidden md:flex justify-end">
-          <button
-            type="submit"
-            disabled={saving}
-            className="rounded-xl bg-gold text-white font-body px-6 py-2.5 disabled:opacity-60"
-          >
-            {saveLabel}
+          <button type="submit" className="rounded-xl bg-gold text-white font-body px-6 py-2.5">
+            Preview
           </button>
         </div>
       </form>
 
-      {/* Sticky mobile action bar — always visible, no scrolling required to
-          save. This button lives outside the <form> element (it has to, to
-          be fixed-positioned against the viewport rather than scrolling
-          with the form content), so it can't rely on native type="submit"
-          form association — it invokes the same submit handler directly. */}
+      {/* Sticky mobile action bar — always visible, no scrolling required. */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-cream p-3">
         <button
           type="button"
-          onClick={handleSubmit(onSubmit)}
-          disabled={saving}
-          className="w-full rounded-xl bg-gold text-white font-body px-6 py-3 disabled:opacity-60"
+          onClick={handleGoToPreview}
+          className="w-full rounded-xl bg-gold text-white font-body px-6 py-3"
         >
-          {saveLabel}
+          Preview
         </button>
       </div>
     </FormProvider>

@@ -18,7 +18,15 @@ type PendingUpload = {
   errorMessage?: string;
 };
 
-export function ImageUploader({ productId, initialImages }: { productId: string; initialImages: ImageItem[] }) {
+export function ImageUploader({
+  productId,
+  initialImages,
+  hasVariants,
+}: {
+  productId: string;
+  initialImages: ImageItem[];
+  hasVariants?: boolean;
+}) {
   const [images, setImages] = useState<ImageItem[]>(initialImages);
   const [pending, setPending] = useState<PendingUpload[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -114,7 +122,15 @@ export function ImageUploader({ productId, initialImages }: { productId: string;
 
   return (
     <div>
-      <h3 className="font-body text-sm font-medium text-ink mb-2">Product Images</h3>
+      <h3 className="font-body text-sm font-medium text-ink mb-2">
+        {hasVariants ? "Additional Photos" : "Product Images"}
+      </h3>
+      {hasVariants && (
+        <p className="text-xs text-ink/40 font-body mb-2">
+          Optional extra angles that aren't tied to a specific colour or size — front, back,
+          side, or a close-up detail shot.
+        </p>
+      )}
 
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}

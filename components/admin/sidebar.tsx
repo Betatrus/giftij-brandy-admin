@@ -12,6 +12,8 @@ import {
   MessageSquare,
   BarChart3,
   FileText,
+  Tag,
+  Star,
   Settings,
   UserCog,
   LogOut,
@@ -30,13 +32,15 @@ type NavItem = {
 const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { label: "Products", href: "/admin/products", icon: Package },
+  { label: "Best Sellers", href: "/admin/best-sellers", icon: Star },
   { label: "Inventory", href: "/admin/inventory", icon: Boxes },
   { label: "Orders", href: "/admin/orders", icon: ShoppingBag },
   { label: "Customers", href: "/admin/customers", icon: Users },
   { label: "Communications", href: "/admin/communications", icon: MessageSquare },
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { label: "Reports", href: "/admin/reports", icon: FileText },
-  { label: "Settings", href: "/admin/settings", icon: Settings, superAdminOnly: true },
+  { label: "Categories", href: "/admin/categories", icon: Tag, superAdminOnly: true },
+  { label: "Settings", href: "/admin/settings", icon: Settings },
   { label: "Staff", href: "/admin/staff", icon: UserCog, superAdminOnly: true },
 ];
 

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listStaff, updateStaffRole, toggleStaffActive } from "@/lib/actions/staff";
+import { listStaff, updateStaffRole, toggleStaffActive, deleteStaff } from "@/lib/actions/staff";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateStaffDialog } from "./create-staff-dialog";
 import { ResetPasswordDialog } from "./reset-password-dialog";
 import { StaffActivityDialog } from "./staff-activity-dialog";
@@ -24,6 +25,7 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
   const [activityTarget, setActivityTarget] = useState<{ id: string; name: string } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -60,6 +62,22 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
       await load();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to update access.");
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setActionError(null);
+    setPendingId(deleteTarget.id);
+    try {
+      await deleteStaff(deleteTarget.id);
+      setDeleteTarget(null);
+      await load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to delete staff account.");
+      setDeleteTarget(null);
     } finally {
       setPendingId(null);
     }
@@ -142,6 +160,15 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
                         {u.isActive ? "Revoke" : "Reactivate"}
                       </button>
                     )}
+                    {u.id !== currentUserId && (
+                      <button
+                        onClick={() => setDeleteTarget({ id: u.id, name: u.name })}
+                        disabled={pendingId === u.id}
+                        className="text-xs text-red-500 hover:text-red-700 underline ml-3 disabled:opacity-50"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))
@@ -199,6 +226,15 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
                     {u.isActive ? "Revoke" : "Reactivate"}
                   </button>
                 )}
+                {u.id !== currentUserId && (
+                  <button
+                    onClick={() => setDeleteTarget({ id: u.id, name: u.name })}
+                    disabled={pendingId === u.id}
+                    className="text-red-500 disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
+                )}
               </div>
             </div>
           ))
@@ -228,6 +264,20 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
           onClose={() => setActivityTarget(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete this staff account?"
+        description={
+          deleteTarget
+            ? `"${deleteTarget.name}" will be permanently removed. This cannot be undone. If they have activity history on record, deletion will be blocked instead — revoke their access in that case.`
+            : ""
+        }
+        confirmLabel="Delete"
+        danger
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

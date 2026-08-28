@@ -5,7 +5,14 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { logActivity } from "@/lib/activity-log";
-import { createStaffSchema, resetPasswordSchema, type CreateStaffInput, type ResetPasswordInput } from "@/lib/validators/staff";
+import {
+  createStaffSchema,
+  resetPasswordSchema,
+  changeOwnPasswordSchema,
+  type CreateStaffInput,
+  type ResetPasswordInput,
+  type ChangeOwnPasswordInput,
+} from "@/lib/validators/staff";
 import { revalidatePath } from "next/cache";
 
 async function requireStaffManager() {
@@ -90,6 +97,50 @@ export async function toggleStaffActive(userId: string, isActive: boolean) {
 }
 
 /**
+ * Development/testing convenience (§19) — permanently removes a staff
+ * account rather than just deactivating it. Same self-protection as
+ * every other staff action here: never your own account, and never the
+ * last remaining Super Admin (deactivating down to zero admins is
+ * already an unrecoverable lockout; deleting is worse, since there'd be
+ * no account left to even reactivate). If the account has inventory/
+ * activity history attached, the database's own foreign-key rules decide
+ * whether that's set-null or blocked — surfaced here as a friendly
+ * message either way, never a raw stack trace.
+ */
+export async function deleteStaff(userId: string) {
+  const session = await requireStaffManager();
+
+  if (userId === session.user.id) {
+    throw new Error("You cannot delete your own account.");
+  }
+
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (target.role === "SUPER_ADMIN") {
+    const superAdminCount = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
+    if (superAdminCount <= 1) {
+      throw new Error("Cannot delete the only remaining Super Admin account.");
+    }
+  }
+
+  try {
+    await prisma.user.delete({ where: { id: userId } });
+  } catch {
+    throw new Error(
+      "This account has activity history tied to it and can't be permanently deleted. Revoke their access instead."
+    );
+  }
+
+  await logActivity({
+    userId: session.user.id,
+    action: "STAFF_DELETE",
+    resource: `User:${userId}`,
+    metadata: { name: target.name, email: target.email },
+  });
+
+  revalidatePath("/admin/staff");
+}
+
+/**
  * Super Admin sets a new password directly, on behalf of a staff member.
  * Not a self-service "forgot password" flow — that would need an email
  * token system (Resend is already wired up for this project, but building
@@ -108,6 +159,38 @@ export async function resetStaffPassword(userId: string, input: ResetPasswordInp
     userId: session.user.id,
     action: "STAFF_PASSWORD_RESET",
     resource: `User:${userId}`,
+  });
+}
+
+/**
+ * Self-service — available to BOTH roles for their OWN account only (no
+ * userId parameter; always acts on the caller's own session). Requires
+ * the current password, verified via bcrypt, before allowing a change —
+ * unlike resetStaffPassword above, which is a Super Admin overriding
+ * someone else's password without knowing it. Genuinely different
+ * operations, kept as two separate functions rather than one with a
+ * conditional, so neither code path can accidentally skip the check the
+ * other relies on.
+ */
+export async function changeOwnPassword(input: ChangeOwnPasswordInput) {
+  const session = await auth();
+  if (!session?.user) throw new Error("UNAUTHENTICATED");
+
+  const parsed = changeOwnPasswordSchema.parse(input);
+
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: session.user.id } });
+  const currentPasswordValid = await bcrypt.compare(parsed.currentPassword, user.passwordHash);
+  if (!currentPasswordValid) {
+    throw new Error("Your current password is incorrect.");
+  }
+
+  const passwordHash = await bcrypt.hash(parsed.newPassword, 12);
+  await prisma.user.update({ where: { id: session.user.id }, data: { passwordHash } });
+
+  await logActivity({
+    userId: session.user.id,
+    action: "OWN_PASSWORD_CHANGE",
+    resource: `User:${session.user.id}`,
   });
 }
 

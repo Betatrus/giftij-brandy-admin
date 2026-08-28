@@ -1,24 +1,52 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useFieldArray, useFormContext } from "react-hook-form";
-import { Trash2, Plus, ImagePlus } from "lucide-react";
-import type { ProductInput } from "@/lib/validators/product";
+import { Trash2, Plus, X } from "lucide-react";
+import type { ProductInput, VariantInput } from "@/lib/validators/product";
 import { VARIANT_TYPE_PRESETS, OTHER_VARIANT_TYPE } from "@/lib/constants/variant-types";
-import { uploadVariantImage } from "@/lib/actions/media";
+import { getProductCategoryKind } from "@/lib/constants/product-category-kind";
+import type { StagedImage } from "./staged-image-picker";
+import { VariantImageSlot } from "./variant-image-slot";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
+type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
+
 /**
- * "Has variants?" toggle -> admin-defined variant type (preset dropdown,
- * or "Other" + a custom text input) -> the list of variant values, each
- * with its own SKU, starting stock, and optional single image.
+ * "Has variants?" toggle -> a variant configurator whose SHAPE depends on
+ * the product's category (see lib/constants/product-category-kind.ts):
  *
- * The database never sees "Colour" vs "Size" as different things — both
- * just become whatever string ends up in Product.variantType. The preset
- * list here is purely a UI convenience so most admins never have to type
- * a variant type from scratch.
+ *   BAG              -> color only (ColorOnlyVariants)
+ *   SHOE_OR_SLIPPER  -> color and/or size, combinations auto-generated
+ *                       (ColorSizeVariantBuilder)
+ *   GENERIC          -> the original free-text variant-type picker, for
+ *                       anything outside the three launch categories
+ *
+ * All three modes write into the same `variants` field array and the same
+ * `variantType` string field — the schema doesn't know or care which mode
+ * produced a row (see prisma/schema.prisma: ProductVariant.value is a
+ * single generic string). This is a deliberate MVP choice: Color+Size
+ * combinations are represented as a single concatenated value
+ * ("Yellow / 7") rather than two separate columns. Flagged in CHANGES.md
+ * as a SCHEMA GAP for the Phase 8 reconciliation (a real two-dimension
+ * variant-option model would replace this).
  */
-export function VariantsSection({ productId }: { productId?: string }) {
+export function VariantsSection({
+  productId,
+  categories,
+  stagedVariantImages,
+  onStageVariantImage,
+}: {
+  productId?: string;
+  categories: CategoryOption[];
+  // Keyed by COLOUR (never by the full "Colour / Size" combination — see
+  // the top comment on VariantImageSlot for why). Only meaningful for a
+  // brand-new product; lifted up to product-form.tsx since it needs this
+  // map after creation succeeds to upload each staged photo to every
+  // real variant ID sharing that colour.
+  stagedVariantImages: Record<string, StagedImage>;
+  onStageVariantImage: (color: string, file: File) => void;
+}) {
   const {
     control,
     watch,
@@ -28,13 +56,16 @@ export function VariantsSection({ productId }: { productId?: string }) {
   } = useFormContext<ProductInput>();
 
   const hasVariants = watch("hasVariants");
-  const variantType = watch("variantType");
+  const categoryIds = watch("categoryIds") ?? [];
   const variants = watch("variants");
-  const { fields, append, remove } = useFieldArray({ control, name: "variants" });
+  const { fields, append, remove, replace } = useFieldArray({ control, name: "variants" });
 
-  const isCustomType = !!variantType && !(VARIANT_TYPE_PRESETS as readonly string[]).includes(variantType);
-  const [showCustomInput, setShowCustomInput] = useState(isCustomType);
   const [confirmDisable, setConfirmDisable] = useState(false);
+
+  const kind = useMemo(
+    () => getProductCategoryKind(categories, categoryIds),
+    [categories, categoryIds]
+  );
 
   function applyToggle(next: boolean) {
     setValue("hasVariants", next);
@@ -45,15 +76,23 @@ export function VariantsSection({ productId }: { productId?: string }) {
   }
 
   // Removing rows one at a time (not via the toggle) down to zero should
-  // automatically fall back to "no variants" — each individual removal
-  // was already a deliberate action, so this doesn't get its own
-  // confirmation dialog on top of that; it's a smooth, automatic revert,
-  // not a separate destructive action requiring its own gate.
+  // automatically fall back to "no variants." Tracked via a ref of the
+  // PREVIOUS fields.length rather than just "is it 0 right now" — the
+  // naive version of this effect fired the instant the checkbox was
+  // first checked (fields.length is always 0 before any variant row has
+  // been added yet), immediately flipping hasVariants back to false and
+  // making the checkbox appear unresponsive/unclickable. Only reverts
+  // when the count actually transitions from >0 down to 0 — i.e. the
+  // admin had at least one variant and removed the last one — never on
+  // the initial "just turned variants on" state.
+  const prevFieldsLengthRef = useRef(fields.length);
   useEffect(() => {
-    if (hasVariants && fields.length === 0) {
+    const prevLength = prevFieldsLengthRef.current;
+    if (hasVariants && prevLength > 0 && fields.length === 0) {
       setValue("hasVariants", false);
       setValue("variantType", null);
     }
+    prevFieldsLengthRef.current = fields.length;
   }, [hasVariants, fields.length, setValue]);
 
   function handleToggleVariants(next: boolean) {
@@ -69,16 +108,6 @@ export function VariantsSection({ productId }: { productId?: string }) {
       }
     }
     applyToggle(next);
-  }
-
-  function handleTypeSelect(selected: string) {
-    if (selected === OTHER_VARIANT_TYPE) {
-      setShowCustomInput(true);
-      setValue("variantType", "");
-    } else {
-      setShowCustomInput(false);
-      setValue("variantType", selected);
-    }
   }
 
   const persistedVariantCount = (variants ?? []).filter((v) => !!v.id).length;
@@ -100,7 +129,8 @@ export function VariantsSection({ productId }: { productId?: string }) {
       {!hasVariants && (
         <div className="space-y-3">
           <p className="text-xs text-ink/40 font-body">
-            Off — this product uses one stock count for the whole item.
+            Off — this product uses one stock count and one set of product images for the
+            whole item.
           </p>
           {!productId ? (
             <div>
@@ -123,85 +153,52 @@ export function VariantsSection({ productId }: { productId?: string }) {
         </div>
       )}
 
-      {hasVariants && (
-        <div className="space-y-4">
-          <p className="text-xs text-ink/50 font-body bg-champagne/20 border border-gold/20 rounded-xl px-3 py-2">
-            Stock will be managed per variant below — the product no longer has one combined
-            stock count.
-          </p>
+      {hasVariants && errors.hasVariants && (
+        <p className="text-xs text-red-600 mb-2">{errors.hasVariants.message as string}</p>
+      )}
+      {hasVariants && errors.variants && typeof errors.variants.message === "string" && (
+        <p className="text-xs text-red-600 mb-2">{errors.variants.message}</p>
+      )}
+      {hasVariants && errors.variants && Array.isArray(errors.variants) && errors.variants.some((e) => e) && (
+        <p className="text-xs text-red-600 mb-2">
+          Every variant needs a name — check the ones outlined in red below.
+        </p>
+      )}
 
-          <div>
-            <label className="font-body text-sm text-ink/70">Variant Type</label>
-            <select
-              value={isCustomType ? OTHER_VARIANT_TYPE : variantType ?? ""}
-              onChange={(e) => handleTypeSelect(e.target.value)}
-              className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body bg-white"
-            >
-              <option value="" disabled>
-                Select a variant type...
-              </option>
-              {VARIANT_TYPE_PRESETS.map((preset) => (
-                <option key={preset} value={preset}>
-                  {preset}
-                </option>
-              ))}
-              <option value={OTHER_VARIANT_TYPE}>Other (custom)</option>
-            </select>
+      {hasVariants && kind === "BAG" && (
+        <ColorOnlyVariants
+          productId={productId}
+          fields={fields}
+          variants={variants}
+          append={append}
+          remove={remove}
+          setVariantType={(t) => setValue("variantType", t)}
+          stagedVariantImages={stagedVariantImages}
+          onStageVariantImage={onStageVariantImage}
+        />
+      )}
 
-            {showCustomInput && (
-              <input
-                placeholder="e.g. Strap Length"
-                value={isCustomType ? variantType ?? "" : ""}
-                onChange={(e) => setValue("variantType", e.target.value)}
-                className="w-full mt-2 rounded-xl border border-cream px-3 py-2 font-body"
-              />
-            )}
-            {errors.hasVariants && (
-              <p className="text-xs text-red-600 mt-1">{errors.hasVariants.message as string}</p>
-            )}
-          </div>
+      {hasVariants && kind === "SHOE_OR_SLIPPER" && (
+        <ColorSizeVariantBuilder
+          productId={productId}
+          variants={variants}
+          replace={replace}
+          setVariantType={(t) => setValue("variantType", t)}
+          stagedVariantImages={stagedVariantImages}
+          onStageVariantImage={onStageVariantImage}
+        />
+      )}
 
-          {/* Values only appear once a type is actually selected — picking
-              "has variants" alone isn't enough to start adding rows, since
-              a value with no declared meaning (no type) isn't useful. */}
-          {!!variantType && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="font-body text-sm text-ink/70">
-                  {variantType} Values
-                </label>
-                <button
-                  type="button"
-                  onClick={() => append({ value: "", sku: "", stock: 0, status: "ACTIVE" })}
-                  className="text-xs text-gold flex items-center gap-1"
-                >
-                  <Plus size={14} /> Add {variantType}
-                </button>
-              </div>
-
-              {fields.length === 0 && (
-                <p className="text-xs text-ink/40 font-body mb-2">
-                  No values yet — add at least one (e.g. &quot;Black&quot;, &quot;42&quot;).
-                </p>
-              )}
-              {errors.variants && typeof errors.variants.message === "string" && (
-                <p className="text-xs text-red-600 mb-2">{errors.variants.message}</p>
-              )}
-
-              <div className="space-y-3">
-                {fields.map((field, index) => (
-                  <VariantRow
-                    key={field.id}
-                    index={index}
-                    productId={productId}
-                    variantId={variants?.[index]?.id}
-                    onRemove={() => remove(index)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+      {hasVariants && kind === "GENERIC" && (
+        <GenericVariantBuilder
+          productId={productId}
+          fields={fields}
+          variants={variants}
+          append={append}
+          remove={remove}
+          stagedVariantImages={stagedVariantImages}
+          onStageVariantImage={onStageVariantImage}
+        />
       )}
 
       <ConfirmDialog
@@ -220,75 +217,597 @@ export function VariantsSection({ productId }: { productId?: string }) {
   );
 }
 
-function VariantRow({
-  index,
+// ============================================================
+// BAG MODE — color only
+// ============================================================
+
+function ColorOnlyVariants({
   productId,
-  variantId,
+  fields,
+  variants,
+  append,
+  remove,
+  setVariantType,
+  stagedVariantImages,
+  onStageVariantImage,
+}: {
+  productId?: string;
+  fields: ReturnType<typeof useFieldArray<ProductInput, "variants">>["fields"];
+  variants: VariantInput[] | undefined;
+  append: ReturnType<typeof useFieldArray<ProductInput, "variants">>["append"];
+  remove: ReturnType<typeof useFieldArray<ProductInput, "variants">>["remove"];
+  setVariantType: (t: string) => void;
+  stagedVariantImages: Record<string, StagedImage>;
+  onStageVariantImage: (color: string, file: File) => void;
+}) {
+  // Bag variants are always "Colour" — set once, no picker shown, so the
+  // admin never has to think about variant TYPE, only the color values.
+  useEffect(() => {
+    setVariantType("Colour");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-ink/50 font-body bg-champagne/20 border border-gold/20 rounded-xl px-3 py-2">
+        Stock will be managed per color below — the product no longer has one combined stock
+        count.
+      </p>
+
+      <div className="flex items-center justify-between mb-2">
+        <label className="font-body text-sm text-ink/70">Colors</label>
+        <button
+          type="button"
+          onClick={() => append({ value: "", sku: "", stock: 0, status: "ACTIVE" })}
+          className="text-xs text-gold flex items-center gap-1"
+        >
+          <Plus size={14} /> Add Color
+        </button>
+      </div>
+
+      {fields.length === 0 && (
+        <p className="text-xs text-ink/40 font-body mb-2">
+          No colors yet — add at least one (e.g. &quot;Yellow&quot;, &quot;Black&quot;, &quot;Brown&quot;).
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {fields.map((field, index) => {
+          const color = variants?.[index]?.value ?? "";
+          return (
+            <VariantRow
+              key={field.id}
+              index={index}
+              valuePlaceholder="Color (e.g. Black)"
+              onRemove={() => remove(index)}
+              imageSlot={
+                <VariantImageSlot
+                  label="Photo"
+                  productId={productId}
+                  variantIds={variants?.[index]?.id ? [variants[index].id!] : []}
+                  existingImageUrl={variants?.[index]?.imageUrl}
+                  stagedImage={color ? stagedVariantImages[color] : undefined}
+                  onStage={(file) => color && onStageVariantImage(color, file)}
+                />
+              }
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SHOE / SLIPPER MODE — color and/or size, combinations generated
+// ============================================================
+
+function ColorSizeVariantBuilder({
+  productId,
+  variants,
+  replace,
+  setVariantType,
+  stagedVariantImages,
+  onStageVariantImage,
+}: {
+  productId?: string;
+  variants: VariantInput[] | undefined;
+  replace: ReturnType<typeof useFieldArray<ProductInput, "variants">>["replace"];
+  setVariantType: (t: string) => void;
+  stagedVariantImages: Record<string, StagedImage>;
+  onStageVariantImage: (color: string, file: File) => void;
+}) {
+  const [useColor, setUseColor] = useState(true);
+  const [useSize, setUseSize] = useState(false);
+  const [colors, setColors] = useState<string[]>([]);
+  const [sizes, setSizes] = useState<string[]>([]);
+  const [colorDraft, setColorDraft] = useState("");
+  const [sizeDraft, setSizeDraft] = useState("");
+  const [seeded, setSeeded] = useState(false);
+  // Tracks combinations the admin deliberately removed, so regenerating
+  // (e.g. after adding a new colour) never silently resurrects one they
+  // took out — the actual fix for "the system should NOT force every
+  // theoretical combination if some combinations do not exist" (§4).
+  // Without this, generateCombinations() would always rebuild the FULL
+  // colour×size cross-product every time it runs, undoing any earlier
+  // removal the moment the admin touched the colour/size lists again.
+  const [excludedCombos, setExcludedCombos] = useState<Set<string>>(new Set());
+
+  // On first load of an existing product, reconstruct the color/size
+  // chip lists by parsing already-saved combination values ("Yellow / 7"
+  // -> color "Yellow", size "7"). This is a best-effort MVP heuristic —
+  // the database only stores the combined string (see the schema-gap
+  // note above), so a product whose variants were entered before this
+  // builder existed, or with unusual formatting, may need its chips
+  // re-entered manually. It never discards existing variant rows either
+  // way; it only seeds the editing UI.
+  useEffect(() => {
+    if (seeded) return;
+    const existing = (variants ?? []).filter((v) => v.value);
+    if (existing.length === 0) {
+      setSeeded(true);
+      return;
+    }
+    const colorSet = new Set<string>();
+    const sizeSet = new Set<string>();
+    let anyCombo = false;
+    for (const v of existing) {
+      if (v.value.includes(" / ")) {
+        anyCombo = true;
+        const [c, s] = v.value.split(" / ").map((p) => p.trim());
+        if (c) colorSet.add(c);
+        if (s) sizeSet.add(s);
+      }
+    }
+    if (anyCombo) {
+      setUseColor(true);
+      setUseSize(true);
+      setColors(Array.from(colorSet));
+      setSizes(Array.from(sizeSet));
+    } else {
+      // Single-axis existing data — treat every existing value as a color
+      // by default (the common case); the admin can switch to Size if
+      // that's what these actually were.
+      setUseColor(true);
+      setUseSize(false);
+      setColors(existing.map((v) => v.value));
+    }
+    setSeeded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seeded]);
+
+  function addChip(list: "color" | "size", raw: string) {
+    const value = raw.trim();
+    if (!value) return;
+    if (list === "color") {
+      if (!colors.includes(value)) setColors([...colors, value]);
+      setColorDraft("");
+    } else {
+      if (!sizes.includes(value)) setSizes([...sizes, value]);
+      setSizeDraft("");
+    }
+  }
+
+  function removeChip(list: "color" | "size", value: string) {
+    if (list === "color") setColors(colors.filter((c) => c !== value));
+    else setSizes(sizes.filter((s) => s !== value));
+  }
+
+  // Existing (already-saved, has an id) rows are matched back in by
+  // value string so regenerating doesn't lose their id/sku/stock/image —
+  // only brand-new combinations start at 0 stock, and combinations no
+  // longer selected are dropped from the array (which the existing
+  // create/update diff logic in lib/actions/products.ts then archives,
+  // same as manually removing a row).
+  function generateCombinations() {
+    const existingByValue = new Map((variants ?? []).map((v) => [v.value, v]));
+    let combos: string[] = [];
+
+    if (useColor && useSize && colors.length > 0 && sizes.length > 0) {
+      for (const c of colors) for (const s of sizes) combos.push(`${c} / ${s}`);
+    } else if (useColor && colors.length > 0) {
+      combos = [...colors];
+    } else if (useSize && sizes.length > 0) {
+      combos = [...sizes];
+    }
+
+    // Never re-include a combination the admin explicitly removed — see
+    // the excludedCombos state declaration above for why this matters.
+    combos = combos.filter((value) => !excludedCombos.has(value));
+
+    const nextVariants: VariantInput[] = combos.map((value) => {
+      const existing = existingByValue.get(value);
+      return existing ?? { value, sku: "", stock: 0, status: "ACTIVE" as const };
+    });
+
+    setVariantType(useColor && useSize ? "Colour + Size" : useColor ? "Colour" : "Size");
+    replace(nextVariants);
+  }
+
+  const canGenerate = (useColor && colors.length > 0) || (useSize && sizes.length > 0);
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-ink/50 font-body bg-champagne/20 border border-gold/20 rounded-xl px-3 py-2">
+        Stock will be managed per combination below — the product no longer has one combined
+        stock count.
+      </p>
+
+      <div>
+        <label className="font-body text-sm text-ink/70 block mb-2">Variant options</label>
+        <div className="flex gap-4">
+          <label className="flex items-center gap-2 font-body text-sm">
+            <input
+              type="checkbox"
+              checked={useColor}
+              onChange={(e) => setUseColor(e.target.checked)}
+            />
+            Color
+          </label>
+          <label className="flex items-center gap-2 font-body text-sm">
+            <input
+              type="checkbox"
+              checked={useSize}
+              onChange={(e) => setUseSize(e.target.checked)}
+            />
+            Size
+          </label>
+        </div>
+        {!useColor && !useSize && (
+          <p className="text-xs text-red-600 font-body mt-1">Select Color, Size, or both.</p>
+        )}
+      </div>
+
+      {useColor && (
+        <ChipInput
+          label="Colors"
+          placeholder="Type a color and press Enter — e.g. Yellow"
+          values={colors}
+          draft={colorDraft}
+          onDraftChange={setColorDraft}
+          onAdd={(v) => addChip("color", v)}
+          onRemove={(v) => removeChip("color", v)}
+        />
+      )}
+
+      {useSize && (
+        <ChipInput
+          label="Sizes"
+          placeholder="Type a size and press Enter — e.g. 7"
+          values={sizes}
+          draft={sizeDraft}
+          onDraftChange={setSizeDraft}
+          onAdd={(v) => addChip("size", v)}
+          onRemove={(v) => removeChip("size", v)}
+        />
+      )}
+
+      {/* One photo PER COLOUR, not per combination — "Yellow" gets one
+          photo shared across every size that colour comes in (Yellow/7,
+          Yellow/8, ...), never a separate photo per size. In edit mode,
+          selecting a photo here uploads it to every real variant ID
+          currently sharing that colour (see VariantImageSlot's top
+          comment for how, given the schema's one-image-per-variant
+          constraint). */}
+      {useColor && colors.length > 0 && (
+        <div className="space-y-2 pt-1">
+          <label className="font-body text-sm text-ink/70">Color Photos</label>
+          <p className="text-[11px] text-ink/40 font-body -mt-1">
+            One photo per colour — it's used for every size that colour comes in.
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            {colors.map((color) => {
+              const variantIdsForColor = (variants ?? [])
+                .filter((v) => v.value === color || v.value.startsWith(`${color} / `))
+                .map((v) => v.id)
+                .filter((id): id is string => !!id);
+              const existingForColor = (variants ?? []).find(
+                (v) => v.value === color || v.value.startsWith(`${color} / `)
+              );
+              return (
+                <VariantImageSlot
+                  key={color}
+                  label={color}
+                  productId={productId}
+                  variantIds={variantIdsForColor}
+                  existingImageUrl={existingForColor?.imageUrl}
+                  stagedImage={stagedVariantImages[color]}
+                  onStage={(file) => onStageVariantImage(color, file)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={generateCombinations}
+        disabled={!canGenerate}
+        className="rounded-xl bg-gold text-white font-body text-sm px-4 py-2 disabled:opacity-40"
+      >
+        {useColor && useSize
+          ? "Generate Combinations"
+          : "Apply " + (useColor ? "Colors" : "Sizes")}
+      </button>
+
+      {(variants ?? []).length > 0 && (
+        <div className="space-y-3 pt-2">
+          <label className="font-body text-sm text-ink/70">
+            {useColor && useSize ? "Color / Size Combinations" : useColor ? "Colors" : "Sizes"}{" "}
+            <span className="text-ink/40">— set stock for each</span>
+          </label>
+          {(variants ?? []).map((v, index) => (
+            <VariantRow
+              key={v.id ?? v.value}
+              index={index}
+              valuePlaceholder=""
+              valueReadOnly
+              onRemove={() => {
+                // Marks this exact combination as deliberately excluded
+                // (see excludedCombos above) BEFORE dropping it from the
+                // array — so clicking "Generate Combinations" again,
+                // e.g. after adding one more colour, won't bring it back.
+                setExcludedCombos((prev) => new Set(prev).add(v.value));
+                const next = (variants ?? []).filter((_, i) => i !== index);
+                replace(next);
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      {excludedCombos.size > 0 && (
+        <div className="pt-1">
+          <p className="font-body text-xs text-ink/40 mb-1.5">
+            Removed — won't be included when you generate combinations again:
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {Array.from(excludedCombos).map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => {
+                  // Restore: un-exclude and add it straight back into the
+                  // combo list at 0 stock, without requiring a full
+                  // regenerate (which could also pull in other, unrelated
+                  // new combinations the admin isn't ready for yet).
+                  setExcludedCombos((prev) => {
+                    const next = new Set(prev);
+                    next.delete(value);
+                    return next;
+                  });
+                  replace([...(variants ?? []), { value, sku: "", stock: 0, status: "ACTIVE" as const }]);
+                }}
+                className="flex items-center gap-1.5 bg-cream/60 text-ink/60 text-xs font-body px-2.5 py-1 rounded-full hover:bg-cream"
+              >
+                {value} <span className="text-gold">+ Add back</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChipInput({
+  label,
+  placeholder,
+  values,
+  draft,
+  onDraftChange,
+  onAdd,
   onRemove,
 }: {
-  index: number;
-  productId?: string;
-  variantId?: string;
-  onRemove: () => void;
+  label: string;
+  placeholder: string;
+  values: string[];
+  draft: string;
+  onDraftChange: (v: string) => void;
+  onAdd: (v: string) => void;
+  onRemove: (v: string) => void;
 }) {
-  const { register } = useFormContext<ProductInput>();
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  return (
+    <div>
+      <label className="font-body text-sm text-ink/70">{label}</label>
+      <div className="flex flex-wrap gap-2 mt-1 mb-2">
+        {values.map((v) => (
+          <span
+            key={v}
+            className="flex items-center gap-1 bg-champagne/30 border border-gold/30 text-ink text-xs font-body px-2.5 py-1 rounded-full"
+          >
+            {v}
+            <button
+              type="button"
+              onClick={() => onRemove(v)}
+              className="text-ink/40 hover:text-ink"
+              aria-label={`Remove ${v}`}
+            >
+              <X size={12} />
+            </button>
+          </span>
+        ))}
+      </div>
+      <input
+        value={draft}
+        onChange={(e) => onDraftChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") {
+            e.preventDefault();
+            onAdd(draft);
+          }
+        }}
+        onBlur={() => onAdd(draft)}
+        placeholder={placeholder}
+        className="w-full rounded-xl border border-cream px-3 py-2 font-body text-sm"
+      />
+    </div>
+  );
+}
 
-  async function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file || !productId || !variantId) return;
+// ============================================================
+// GENERIC MODE — original free-text variant-type picker, for products
+// outside Bags/Shoes/Slippers (legacy data, or a future 4th category).
+// ============================================================
 
-    setUploading(true);
-    setUploadError(null);
-    try {
-      const reader = new FileReader();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error("Could not read the selected file."));
-        reader.readAsDataURL(file);
-      });
-      const image = await uploadVariantImage({ variantId, productId, fileBase64: base64 });
-      setImageUrl(image.url);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed.");
-    } finally {
-      setUploading(false);
+function GenericVariantBuilder({
+  productId,
+  fields,
+  variants,
+  append,
+  remove,
+  stagedVariantImages,
+  onStageVariantImage,
+}: {
+  productId?: string;
+  fields: ReturnType<typeof useFieldArray<ProductInput, "variants">>["fields"];
+  variants: VariantInput[] | undefined;
+  append: ReturnType<typeof useFieldArray<ProductInput, "variants">>["append"];
+  remove: ReturnType<typeof useFieldArray<ProductInput, "variants">>["remove"];
+  stagedVariantImages: Record<string, StagedImage>;
+  onStageVariantImage: (color: string, file: File) => void;
+}) {
+  const { watch, setValue } = useFormContext<ProductInput>();
+  const variantType = watch("variantType");
+  const isCustomType = !!variantType && !(VARIANT_TYPE_PRESETS as readonly string[]).includes(variantType);
+  const [showCustomInput, setShowCustomInput] = useState(isCustomType);
+
+  function handleTypeSelect(selected: string) {
+    if (selected === OTHER_VARIANT_TYPE) {
+      setShowCustomInput(true);
+      setValue("variantType", "");
+    } else {
+      setShowCustomInput(false);
+      setValue("variantType", selected);
     }
   }
 
   return (
-    <div className="border border-cream rounded-xl p-3 flex gap-3 items-start">
-      <label className="shrink-0 w-14 h-14 rounded-lg border border-dashed border-cream flex items-center justify-center cursor-pointer bg-cream/20 overflow-hidden">
-        {imageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={imageUrl} alt="" className="w-full h-full object-cover" />
-        ) : uploading ? (
-          <span className="text-[9px] text-ink/40 font-body">...</span>
-        ) : (
-          <ImagePlus size={16} className="text-ink/30" />
-        )}
-        <input
-          type="file"
-          accept="image/*"
-          className="hidden"
-          disabled={!productId || !variantId}
-          onChange={handleImageChange}
-        />
-      </label>
+    <div className="space-y-4">
+      <p className="text-xs text-ink/50 font-body bg-champagne/20 border border-gold/20 rounded-xl px-3 py-2">
+        Stock will be managed per variant below — the product no longer has one combined stock
+        count.
+      </p>
 
-      <div className="flex-1 grid grid-cols-3 gap-2">
+      <div>
+        <label className="font-body text-sm text-ink/70">Variant Type</label>
+        <select
+          value={isCustomType ? OTHER_VARIANT_TYPE : variantType ?? ""}
+          onChange={(e) => handleTypeSelect(e.target.value)}
+          className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body bg-white"
+        >
+          <option value="" disabled>
+            Select a variant type...
+          </option>
+          {VARIANT_TYPE_PRESETS.map((preset) => (
+            <option key={preset} value={preset}>
+              {preset}
+            </option>
+          ))}
+          <option value={OTHER_VARIANT_TYPE}>Other (custom)</option>
+        </select>
+
+        {showCustomInput && (
+          <input
+            placeholder="e.g. Strap Length"
+            value={isCustomType ? variantType ?? "" : ""}
+            onChange={(e) => setValue("variantType", e.target.value)}
+            className="w-full mt-2 rounded-xl border border-cream px-3 py-2 font-body"
+          />
+        )}
+      </div>
+
+      {!!variantType && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="font-body text-sm text-ink/70">{variantType} Values</label>
+            <button
+              type="button"
+              onClick={() => append({ value: "", sku: "", stock: 0, status: "ACTIVE" })}
+              className="text-xs text-gold flex items-center gap-1"
+            >
+              <Plus size={14} /> Add {variantType}
+            </button>
+          </div>
+
+          {fields.length === 0 && (
+            <p className="text-xs text-ink/40 font-body mb-2">
+              No values yet — add at least one (e.g. &quot;Black&quot;, &quot;42&quot;).
+            </p>
+          )}
+
+          <div className="space-y-3">
+            {fields.map((field, index) => {
+              const key = variants?.[index]?.value ?? "";
+              return (
+                <VariantRow
+                  key={field.id}
+                  index={index}
+                  valuePlaceholder="Value (e.g. Black)"
+                  onRemove={() => remove(index)}
+                  imageSlot={
+                    <VariantImageSlot
+                      label="Photo"
+                      productId={productId}
+                      variantIds={variants?.[index]?.id ? [variants[index].id!] : []}
+                      existingImageUrl={variants?.[index]?.imageUrl}
+                      stagedImage={key ? stagedVariantImages[key] : undefined}
+                      onStage={(file) => key && onStageVariantImage(key, file)}
+                    />
+                  }
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Shared row — image upload + stock. SKU is never shown/typed here (see
+// lib/validators/product.ts — auto-generated server-side on save).
+// ============================================================
+
+// ============================================================
+// Shared row — value + stock inputs. Image handling was moved out to
+// VariantImageSlot (see that file's top comment) so the same slot
+// component can represent either one variant (here) or a whole colour
+// group shared across several sizes (ColorSizeVariantBuilder's dedicated
+// "Colour Photos" section). SKU is never shown/typed here (see
+// lib/validators/product.ts — auto-generated server-side on save).
+// ============================================================
+
+function VariantRow({
+  index,
+  valuePlaceholder,
+  valueReadOnly,
+  onRemove,
+  imageSlot,
+}: {
+  index: number;
+  valuePlaceholder: string;
+  valueReadOnly?: boolean;
+  onRemove: () => void;
+  imageSlot?: React.ReactNode;
+}) {
+  const { register, formState: { errors } } = useFormContext<ProductInput>();
+  const valueError = errors.variants?.[index]?.value;
+
+  return (
+    <div className="border border-cream rounded-xl p-3 flex gap-3 items-start">
+      {imageSlot}
+
+      <div className="flex-1 grid grid-cols-2 gap-2">
         <input
-          placeholder="Value (e.g. Black)"
+          placeholder={valuePlaceholder}
+          readOnly={valueReadOnly}
           {...register(`variants.${index}.value` as const)}
-          className="rounded-lg border border-cream px-2 py-1.5 text-sm font-body"
-        />
-        <input
-          placeholder="Variant SKU"
-          {...register(`variants.${index}.sku` as const)}
-          className="rounded-lg border border-cream px-2 py-1.5 text-sm font-body"
+          className={`rounded-lg border px-2 py-1.5 text-sm font-body ${
+            valueError ? "border-red-400" : "border-cream"
+          } ${valueReadOnly ? "bg-cream/30 text-ink/70" : ""}`}
         />
         <input
           type="number"
@@ -296,12 +815,11 @@ function VariantRow({
           {...register(`variants.${index}.stock` as const)}
           className="rounded-lg border border-cream px-2 py-1.5 text-sm font-body"
         />
-        {!productId && (
-          <p className="col-span-3 text-[11px] text-ink/40 font-body">
-            Save the product first to upload an image for this variant.
+        {valueError && (
+          <p className="col-span-2 text-[11px] text-red-600 font-body">
+            {(valueError.message as string) ?? "This needs a name."}
           </p>
         )}
-        {uploadError && <p className="col-span-3 text-[11px] text-red-600 font-body">{uploadError}</p>}
       </div>
 
       <button type="button" onClick={onRemove} className="text-ink/40 hover:text-red-600 shrink-0">

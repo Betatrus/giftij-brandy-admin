@@ -1,15 +1,38 @@
 import { auth } from "@/auth";
-import { canViewFinancials } from "@/lib/permissions";
-import { prisma } from "@/lib/prisma";
-import { getLowStockCount } from "@/lib/actions/inventory";
+import { getDashboardOverview } from "@/lib/actions/dashboard";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import Link from "next/link";
+import { ArrowUp, ArrowDown } from "lucide-react";
 
-function StatCard({ label, value, href }: { label: string; value: string; href?: string }) {
+function ComparisonNote({ changePercent }: { changePercent: number | null }) {
+  if (changePercent === null) {
+    return <p className="font-body text-[11px] text-ink/30 mt-1">No comparison available</p>;
+  }
+  const isUp = changePercent >= 0;
+  return (
+    <p className={`flex items-center gap-1 font-body text-[11px] mt-1 ${isUp ? "text-green-700" : "text-red-600"}`}>
+      {isUp ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+      {Math.abs(changePercent)}% from yesterday
+    </p>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  href,
+  changePercent,
+}: {
+  label: string;
+  value: string;
+  href?: string;
+  changePercent?: number | null;
+}) {
   const content = (
     <>
       <p className="font-body text-xs text-ink/50 mb-1">{label}</p>
       <p className="font-display text-2xl text-ink">{value}</p>
+      {changePercent !== undefined && <ComparisonNote changePercent={changePercent} />}
     </>
   );
 
@@ -29,15 +52,7 @@ function StatCard({ label, value, href }: { label: string; value: string; href?:
 
 export default async function DashboardPage() {
   const session = await auth();
-  const role = session!.user.role;
-  const showFinancials = canViewFinancials(role);
-
-  // Orders aren't built until Milestone 4 — those cards stay placeholders
-  // AND non-clickable until an Orders page actually exists to send them to.
-  const [productCount, lowStockCount] = await Promise.all([
-    prisma.product.count({ where: { status: "ACTIVE" } }),
-    getLowStockCount(),
-  ]);
+  const overview = await getDashboardOverview();
 
   return (
     <div>
@@ -48,24 +63,30 @@ export default async function DashboardPage() {
       </p>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Orders Today" value="—" />
-        <StatCard label="Pending Orders" value="—" />
-        <StatCard label="Products" value={String(productCount)} href="/admin/products" />
-        <StatCard label="Low Stock" value={String(lowStockCount)} href="/admin/inventory?lowStock=true" />
+        <StatCard label="Orders Today" value={String(overview.orders.value)} changePercent={overview.orders.changePercent} href="/admin/orders" />
+        <StatCard label="Pending Orders" value={String(overview.pendingOrderCount)} href="/admin/orders?status=PENDING" />
+        <StatCard label="Products" value={String(overview.productCount)} href="/admin/products" />
+        <StatCard label="Low Stock" value={String(overview.lowStockCount)} href="/admin/inventory?lowStock=true" />
 
-        {showFinancials && (
-          <>
-            <StatCard label="Revenue" value="—" />
-            <StatCard label="Gross Profit" value="—" />
-            <StatCard label="Net Profit" value="—" />
-            <StatCard label="Inventory Value" value="—" href="/admin/inventory" />
-          </>
+        {overview.revenue && (
+          <StatCard
+            label="Revenue Today"
+            value={`₦${overview.revenue.value.toLocaleString()}`}
+            changePercent={overview.revenue.changePercent}
+          />
+        )}
+        {overview.profit && (
+          <StatCard
+            label="Profit Today"
+            value={`₦${overview.profit.value.toLocaleString()}`}
+            changePercent={overview.profit.changePercent}
+          />
         )}
       </div>
 
-      {!showFinancials && (
+      {!overview.revenue && (
         <p className="font-body text-xs text-ink/40">
-          Financial figures are visible to Super Admin only.
+          Money figures are visible to Super Admin only.
         </p>
       )}
     </div>

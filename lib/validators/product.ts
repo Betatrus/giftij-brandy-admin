@@ -12,12 +12,23 @@ export const specSchema = z.object({
 // No color/size/material/pattern/price fields — `value` is generic (its
 // meaning comes from the parent Product's `variantType`), and price is
 // never per-variant: all variants of a product share Product.price.
+// `sku` is optional here — the admin never types one; if left blank the
+// server auto-generates it from the product SKU + variant value (see
+// lib/actions/products.ts). Still required in the database (unique,
+// non-null) — this is an input-side relaxation only.
 export const variantSchema = z.object({
   id: z.string().optional(),
   value: z.string().min(1, "Variant value is required"),
-  sku: z.string().min(1, "Variant SKU is required"),
+  sku: z.string().optional().default(""),
   stock: z.coerce.number().int().min(0).default(0),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("ACTIVE"),
+  // Display-only — the already-uploaded Cloudinary URL for this exact
+  // variant, when editing an existing product. Never sent anywhere by
+  // the admin; carried through defaultValues purely so the edit form can
+  // show what's already there (see the "existing variant images never
+  // displayed" fix in components/admin/products/variants-section.tsx).
+  // Always absent/undefined for a brand-new product.
+  imageUrl: z.string().optional().nullable(),
 });
 
 export const productSchema = z
@@ -30,14 +41,24 @@ export const productSchema = z
       .regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, "Slug must be lowercase, hyphenated, no spaces")
       .optional()
       .nullable(),
-    shortDesc: z.string().min(1, "Short description is required").max(200),
-    fullDesc: z.string().min(1, "Full description is required"),
+    // Not shown in the form — the database still requires a short
+    // description, so if left blank the server derives one from
+    // `fullDesc` (see lib/actions/products.ts). Admins who want a
+    // specific short description can still set one via `defaultValues`
+    // carried over from an existing product; there's just no input for
+    // typing a new one, per the "simple form" requirement.
+    shortDesc: z.string().optional().default(""),
+    fullDesc: z.string().min(1, "Description is required"),
 
-    // Many-to-many — a product can belong to more than one category.
-    categoryIds: z.array(z.string()).min(1, "Select at least one category"),
+    // Single-select in the UI (see CategorySelect) — still an array at
+    // the schema/database level because Category is many-to-many.
+    categoryIds: z.array(z.string()).min(1, "Select a category"),
 
     brand: z.string().default("Giftij Brandy"),
-    sku: z.string().min(1, "SKU is required"),
+    // Not shown in the form — auto-generated server-side if blank (see
+    // lib/actions/products.ts). Kept optional here, not removed, since
+    // the database column is still required/unique.
+    sku: z.string().optional().default(""),
     barcode: z.string().optional().nullable(),
 
     price: z.coerce.number().min(0, "Price must be 0 or more"),

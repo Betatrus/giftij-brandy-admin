@@ -10,7 +10,9 @@ import { SearchInput } from "@/components/ui/search-input";
 import { Pagination } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CategoryFilterTabs } from "@/components/admin/shared/category-filter-tabs";
 import { Copy } from "lucide-react";
+import { getStockStatus, stockStatusBadgeTone, STOCK_STATUS_LABELS } from "@/lib/utils/stock-status";
 
 type ProductRow = {
   id: string;
@@ -20,21 +22,32 @@ type ProductRow = {
   status: string;
   price: number | null;
   images: { url: string }[];
-  inventory: { currentStock: number; lowStockThreshold: number } | null;
-  variants: { id: string; currentStock: number; lowStockThreshold: number }[];
+  inventory: { currentStock: number; soldStock: number; lowStockThreshold: number } | null;
+  variants: { id: string; currentStock: number; soldStock: number; lowStockThreshold: number }[];
+  featuredFlags: string[];
 };
 
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
+
+// Worst-status-wins ordering — a product with 3 variants where even one
+// is Out of Stock should never present as a blanket "In Stock."
+const SEVERITY: Record<string, number> = { OUT_OF_STOCK: 3, VERY_LOW_STOCK: 2, LOW_STOCK: 1, IN_STOCK: 0 };
 
 function stockInfo(p: ProductRow) {
   const totalStock = p.inventory
     ? p.inventory.currentStock
     : p.variants.reduce((sum, v) => sum + v.currentStock, 0);
-  const lowStock = p.inventory
-    ? p.inventory.currentStock <= p.inventory.lowStockThreshold
-    : p.variants.some((v) => v.currentStock <= v.lowStockThreshold);
+
+  const statuses = p.inventory
+    ? [getStockStatus(p.inventory)]
+    : p.variants.map((v) => getStockStatus(v));
+
+  const worstStatus = statuses.length > 0
+    ? statuses.reduce((worst, s) => (SEVERITY[s] > SEVERITY[worst] ? s : worst), "IN_STOCK")
+    : "IN_STOCK";
+
   const hasVariants = p.variants.length > 0;
-  return { totalStock, lowStock, hasVariants };
+  return { totalStock, stockStatus: worstStatus, hasVariants };
 }
 
 export function ProductTable({ role, categories }: { role: StaffRole; categories: CategoryOption[] }) {
@@ -158,20 +171,18 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
 
   return (
     <div>
+      <div className="mb-4">
+        <CategoryFilterTabs
+          categories={categories}
+          value={categoryId}
+          onChange={(id) => updateFilter("category", id)}
+        />
+      </div>
+
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="w-full sm:w-64">
           <SearchInput placeholder="Search name or SKU..." onSearch={(v) => updateFilter("q", v)} initialValue={search} />
         </div>
-        <select
-          value={categoryId}
-          onChange={(e) => updateFilter("category", e.target.value)}
-          className="rounded-xl border border-cream px-3 py-2 font-body text-sm"
-        >
-          <option value="">All categories</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
-        </select>
         <select
           value={status}
           onChange={(e) => updateFilter("status", e.target.value)}
@@ -248,7 +259,7 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
               </tr>
             ) : (
               rows.map((p) => {
-                const { totalStock, lowStock, hasVariants } = stockInfo(p);
+                const { totalStock, stockStatus, hasVariants } = stockInfo(p);
                 return (
                   <tr key={p.id} className="border-t border-cream">
                     <td className="px-4 py-3">
@@ -284,15 +295,23 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                     <td className="px-4 py-3">
                       {p.inventory || hasVariants ? (
                         <Badge
-                          label={hasVariants ? `${totalStock} across ${p.variants.length} variants` : `${totalStock} in stock`}
-                          tone={lowStock ? "LOW_STOCK" : "ACTIVE"}
+                          label={`${STOCK_STATUS_LABELS[stockStatus]} (${totalStock})`}
+                          tone={stockStatusBadgeTone(stockStatus)}
                         />
                       ) : (
                         "—"
                       )}
+                      <p className="text-[11px] text-ink/40 mt-1">
+                        {hasVariants ? "Has variants" : "No variants"}
+                      </p>
                     </td>
                     <td className="px-4 py-3">
-                      <Badge label={p.status} tone={p.status as "ACTIVE" | "DRAFT" | "ARCHIVED"} />
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge label={p.status} tone={p.status as "ACTIVE" | "DRAFT" | "ARCHIVED"} />
+                        {p.featuredFlags?.includes("best_sellers") && (
+                          <Badge label="Best Seller" tone="BEST_SELLER" />
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       {canWrite && (
@@ -310,6 +329,14 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                           className="text-ink/50 hover:text-ink text-xs underline"
                         >
                           Archive
+                        </button>
+                      )}
+                      {canWrite && (
+                        <button
+                          onClick={() => setConfirmTarget({ id: p.id, mode: "delete" })}
+                          className="text-red-500 hover:text-red-700 text-xs underline ml-3"
+                        >
+                          Delete
                         </button>
                       )}
                     </td>
@@ -333,7 +360,7 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
           </div>
         ) : (
           rows.map((p) => {
-            const { totalStock, lowStock, hasVariants } = stockInfo(p);
+            const { totalStock, stockStatus, hasVariants } = stockInfo(p);
             return (
               <div key={p.id} className="bg-white rounded-2xl shadow-soft overflow-hidden">
                 {p.images?.[0]?.url ? (
@@ -353,11 +380,17 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                     <Link href={`/admin/products/${p.id}/edit`} className="font-body text-sm text-ink font-medium hover:underline">
                       {p.name}
                     </Link>
-                    <Badge label={p.status} tone={p.status as "ACTIVE" | "DRAFT" | "ARCHIVED"} />
+                    <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                      <Badge label={p.status} tone={p.status as "ACTIVE" | "DRAFT" | "ARCHIVED"} />
+                      {p.featuredFlags?.includes("best_sellers") && (
+                        <Badge label="Best Seller" tone="BEST_SELLER" />
+                      )}
+                    </div>
                   </div>
                   <p className="font-body text-xs text-ink/50 mb-2">{p.sku}</p>
                   <p className="font-body text-xs text-ink/60 mb-3">
                     {p.categories.length > 0 ? p.categories.map((c) => c.name).join(", ") : "No category"}
+                    <span className="text-ink/30"> · {hasVariants ? "Has variants" : "No variants"}</span>
                   </p>
 
                   <div className="flex items-center justify-between mb-3">
@@ -366,8 +399,8 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                     </span>
                     {p.inventory || hasVariants ? (
                       <Badge
-                        label={hasVariants ? `${totalStock} across ${p.variants.length}` : `${totalStock} in stock`}
-                        tone={lowStock ? "LOW_STOCK" : "ACTIVE"}
+                        label={`${STOCK_STATUS_LABELS[stockStatus]} (${totalStock})`}
+                        tone={stockStatusBadgeTone(stockStatus)}
                       />
                     ) : null}
                   </div>
@@ -376,6 +409,9 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                     <div className="flex items-center gap-4 pt-3 border-t border-cream font-body text-xs">
                       <Link href={`/admin/products/${p.id}/edit`} className="text-gold">
                         Edit
+                      </Link>
+                      <Link href={`/admin/products/${p.id}/edit`} className="text-ink/60">
+                        View
                       </Link>
                       <button
                         onClick={() => handleDuplicate(p.id)}
@@ -393,6 +429,12 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                           Archive
                         </button>
                       )}
+                      <button
+                        onClick={() => setConfirmTarget({ id: p.id, mode: "delete" })}
+                        className={`text-red-500 ${p.status === "ARCHIVED" ? "ml-auto" : ""}`}
+                      >
+                        Delete
+                      </button>
                     </div>
                   )}
                 </div>

@@ -38,6 +38,18 @@ export async function generateUniqueSku(
   return generateUniqueValue(baseSku, checkExists, (base, n) => `${base}-${n}`);
 }
 
+/**
+ * Generic version of generateUniqueSlug/generateUniqueSku for any other
+ * unique string field (e.g. Order.orderNumber) — same collision-retry
+ * behavior, just without slugify's lowercase/hyphenate transformation.
+ */
+export async function generateUniqueValueLike(
+  base: string,
+  checkExists: (candidate: string) => Promise<boolean>
+): Promise<string> {
+  return generateUniqueValue(base, checkExists, (b, n) => `${b}-${n}`);
+}
+
 async function generateUniqueValue(
   base: string,
   checkExists: (candidate: string) => Promise<boolean>,
