@@ -47,6 +47,53 @@ async function autoVariantSku(productSku: string, value: string) {
   });
 }
 
+// ------------------------------------------------------------------
+// PHASE 9 — Color x Size structured fields
+//
+// `color`/`size` are the authoritative structured data going forward;
+// `value` becomes a SERVER-DERIVED display/back-compat string for the two
+// single-axis-or-both cases, and stays exactly what the admin typed for
+// Material/custom variant types (where color/size are legitimately null).
+//
+// deriveVariantColorSize resolves color/size for a submitted variant row:
+//   1. If the row already carries an explicit color/size (the Colour+Size
+//      builder always sends both), use them as-is — never re-derived by
+//      parsing anything.
+//   2. Else, for the two single-axis variant types ("Colour" / "Size" —
+//      set automatically by the Bag/Colour-only builder and the Size-only
+//      path of the Colour+Size builder), the single `value` the admin
+//      typed/chose IS the color or the size — a direct field mapping, not
+//      string parsing.
+//   3. Else (Material/custom/anything else) — genuinely neither; `value`
+//      alone stays authoritative for those, exactly as before Phase 9.
+// ------------------------------------------------------------------
+function deriveVariantColorSize(
+  v: { value: string; color?: string | null; size?: string | null },
+  variantType: string | null | undefined
+): { color: string | null; size: string | null } {
+  const explicitColor = v.color?.trim() || null;
+  const explicitSize = v.size?.trim() || null;
+  if (explicitColor || explicitSize) {
+    return { color: explicitColor, size: explicitSize };
+  }
+  if (variantType === "Colour") return { color: v.value.trim() || null, size: null };
+  if (variantType === "Size") return { color: null, size: v.value.trim() || null };
+  return { color: null, size: null };
+}
+
+// The server-generated display value — authoritative source is color/size
+// when either is present; falls back to the admin-typed `value` only for
+// Material/custom variants (see deriveVariantColorSize above).
+function deriveVariantValue(
+  v: { value: string },
+  colorSize: { color: string | null; size: string | null }
+): string {
+  if (colorSize.color && colorSize.size) return `${colorSize.color} / ${colorSize.size}`;
+  if (colorSize.color) return colorSize.color;
+  if (colorSize.size) return colorSize.size;
+  return v.value;
+}
+
 // The database still requires a short description (see Product.shortDesc
 // in prisma/schema.prisma); the form no longer collects one (see
 // lib/validators/product.ts), so this derives a reasonable one from the
@@ -93,12 +140,18 @@ export async function createProduct(input: ProductInput) {
     : 0;
 
   const variantCreates = await Promise.all(
-    parsed.variants.map(async (v) => ({
-      value: v.value,
-      sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, v.value),
-      currentStock: v.stock,
-      status: v.status,
-    }))
+    parsed.variants.map(async (v) => {
+      const colorSize = deriveVariantColorSize(v, parsed.hasVariants ? parsed.variantType : null);
+      const value = deriveVariantValue(v, colorSize);
+      return {
+        value,
+        color: colorSize.color,
+        size: colorSize.size,
+        sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, value),
+        currentStock: v.stock,
+        status: v.status,
+      };
+    })
   );
 
   const product = await prisma.product.create({
@@ -151,12 +204,17 @@ export async function createProduct(input: ProductInput) {
   revalidatePath("/admin/dashboard");
   revalidateTag("products");
 
-  // Returns the created variants too (id + value), not just the product
-  // id — the product form needs this to know which real variant IDs were
-  // just created for each colour, so staged variant photos (selected
-  // before the product existed) can be uploaded and associated correctly
-  // right after creation. See product-form.tsx's onSubmit.
-  return { id: product.id, variants: product.variants.map((v) => ({ id: v.id, value: v.value })) };
+  // Returns the created variants too (id + value + color), not just the
+  // product id — the product form needs this to know which real variant
+  // IDs were just created for each colour, so staged variant photos
+  // (selected before the product existed) can be uploaded and associated
+  // correctly right after creation. See product-form.tsx's onSubmit —
+  // `color` is the structured field it matches on now (falling back to
+  // `value` only for legacy/Material rows without one).
+  return {
+    id: product.id,
+    variants: product.variants.map((v) => ({ id: v.id, value: v.value, color: v.color })),
+  };
 }
 
 // ------------------------------------------------------------------
@@ -283,6 +341,9 @@ export async function updateProduct(id: string, input: ProductInput) {
       }
 
       for (const v of parsed.variants) {
+        const colorSize = deriveVariantColorSize(v, parsed.variantType);
+        const value = deriveVariantValue(v, colorSize);
+
         if (v.id) {
           // Deliberately NOT touching currentStock/reservedStock/etc.
           // here — stock changes go through adjustVariantStock only, so
@@ -294,14 +355,16 @@ export async function updateProduct(id: string, input: ProductInput) {
           // variant that may already be referenced by past OrderItems.
           await tx.productVariant.update({
             where: { id: v.id },
-            data: { value: v.value, status: v.status },
+            data: { value, color: colorSize.color, size: colorSize.size, status: v.status },
           });
         } else {
           await tx.productVariant.create({
             data: {
               productId: id,
-              value: v.value,
-              sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, v.value),
+              value,
+              color: colorSize.color,
+              size: colorSize.size,
+              sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, value),
               currentStock: v.stock,
               status: v.status,
             },
@@ -384,8 +447,12 @@ export async function duplicateProduct(id: string) {
   });
 
   const variantCreates = await Promise.all(
-    source.variants.map(async (v: { value: string; sku: string }) => ({
+    source.variants.map(async (v: { value: string; sku: string; color: string | null; size: string | null }) => ({
       value: v.value,
+      // Structured color/size carry over unchanged — a duplicate is the
+      // same colour/size structure with fresh stock, not a re-derivation.
+      color: v.color,
+      size: v.size,
       sku: await generateUniqueSku(`${v.sku}-COPY`, async (candidate) => {
         const existing = await prisma.productVariant.findUnique({ where: { sku: candidate } });
         return !!existing;

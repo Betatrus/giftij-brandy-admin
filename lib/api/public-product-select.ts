@@ -55,6 +55,8 @@ export const PUBLIC_PRODUCT_DETAIL_SELECT = {
       id: true,
       sku: true,
       value: true,
+      color: true,
+      size: true,
       currentStock: true,
       status: true,
       image: { select: { url: true, altText: true } },
@@ -109,6 +111,8 @@ interface ProductDetailRowShape {
     id: string;
     sku: string;
     value: string;
+    color: string | null;
+    size: string | null;
     currentStock: number;
     status: string;
     image: { url: string; altText: string | null } | null;
@@ -186,7 +190,17 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     variants: row.variants
       .filter((v) => v.status !== "ARCHIVED") // sold-out variants stay visible; archived ones don't
       .map((v) => ({
+        // `id` is the authoritative transactional identity — the
+        // storefront's Color -> Size -> variant resolution (and
+        // checkStockAvailability/checkout) must use this, never
+        // reconstruct it from `value`. `color`/`size` (Phase 9) let the
+        // storefront group/filter without parsing `value` itself; both
+        // are null for Material/custom variants, where `value` alone is
+        // still the whole story.
+        id: v.id,
         sku: v.sku,
+        color: v.color,
+        size: v.size,
         value: v.value,
         inStock: v.currentStock > 0,
         image: v.image?.url ?? null,

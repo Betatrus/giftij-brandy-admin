@@ -228,9 +228,21 @@ model ProductVariant {
   product   Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
   // What this value MEANS is given by the parent Product's `variantType`
   // (e.g. variantType "color" -> value "Black"; variantType "size" ->
-  // value "42"). One flexible column instead of separate color/size/
-  // material/pattern columns — new variant dimensions need no migration.
+  // value "42"). Kept as the display/back-compat representation — reports,
+  // order history, and any UI that just wants "the label" read this.
   value     String
+  // Structured Color × Size fields — added in Phase 9 so a Color+Size
+  // combination ("Yellow / 16") is independently queryable instead of
+  // being reconstructed by parsing `value`. Populated for the two single-
+  // axis cases too (Colour-only -> color set, size null; Size-only ->
+  // size set, color null); both stay null for Material/custom variant
+  // types, which remain represented by `value` alone — deliberately NOT
+  // a generalized variant-option engine, just these two extra columns.
+  // `value` remains authoritative for Material/custom; for Colour and/or
+  // Size it's now server-derived FROM color/size (see lib/actions/
+  // products.ts) rather than the other way around.
+  color     String?
+  size      String?
   sku       String        @unique
   status    ProductStatus @default(ACTIVE) // lets a single colour (e.g. a discontinued one) be archived independently of the rest of the product
   // No price field: confirmed business rule — all variants of a product

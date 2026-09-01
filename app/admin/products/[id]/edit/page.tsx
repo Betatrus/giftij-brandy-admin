@@ -41,7 +41,7 @@ export default async function EditProductPage({
     featuredFlags: string[];
     variantType: string | null;
     specs: { id: string; label: string; value: string }[];
-    variants: { id: string; value: string; sku: string; currentStock: number; status: string; image: { url: string } | null }[];
+    variants: { id: string; value: string; color: string | null; size: string | null; sku: string; currentStock: number; status: string; image: { url: string } | null }[];
     images: { id: string; url: string; sortOrder: number }[];
   };
 
@@ -72,6 +72,8 @@ export default async function EditProductPage({
     variants: product.variants.map((v) => ({
       id: v.id,
       value: v.value,
+      color: v.color,
+      size: v.size,
       sku: v.sku,
       stock: v.currentStock,
       status: v.status as "DRAFT" | "ACTIVE" | "ARCHIVED",

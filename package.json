@@ -13,6 +13,7 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:backfill-batch1": "tsx prisma/backfill-batch1.ts",
+    "prisma:backfill-variant-color-size": "tsx prisma/backfill-variant-color-size.ts",
     "prisma:seed-categories": "tsx prisma/seed-categories.ts",
     "prisma:migrate-categories": "tsx prisma/migrate-categories-to-bags-shoes-slippers.ts"
   },

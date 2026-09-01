@@ -1,3 +1,201 @@
+## Phase 9: Color x Size structured variant fields
+
+Implements the master prompt's Phase 9 Color x Size Variant Architecture — a surgical,
+additive schema change, not a redesign. Full report below follows the requested format.
+
+### A. Inspection summary
+
+Confirmed the repository matches the handoff description: `ProductVariant.value` was the
+single free-text column representing a variant's label, with Color+Size combinations
+stored as the joined string `"Yellow / 16"`. Three places reconstructed color from that
+string via `.split(" / ")` or `.startsWith(`${color} / `)`: the admin edit-form's
+color/size chip-seeding effect, the "Color Photos" grouping filter, and the post-create
+image fan-out — all three in `components/admin/products/variants-section.tsx` and
+`components/admin/products/product-form.tsx`. `ProductVariant.id` was, and remains,
+the sole transactional identity referenced by `OrderItem.variantId`, stock functions,
+and the Paystack webhook — none of those files touch `.value` at all, confirmed by
+`grep`, so none needed to change.
+
+### B. Files changed
+
+- `prisma/schema.prisma` — added `color String?` / `size String?` to `ProductVariant`.
+- `prisma/migrations/20260901120000_add_variant_color_size/migration.sql` — new migration,
+  additive only.
+- `prisma/backfill-variant-color-size.ts` — new one-time backfill script (+ its
+  `prisma:backfill-variant-color-size` npm script).
+- `lib/validators/product.ts` — `variantSchema` gets optional `color`/`size`; added a
+  refinement requiring both on every row when `variantType === "Colour + Size"`.
+- `lib/actions/products.ts` — new `deriveVariantColorSize` / `deriveVariantValue` helpers;
+  wired into `createProduct`, `updateProduct`, `duplicateProduct`; `createProduct`'s
+  return shape now includes `color` per variant.
+- `lib/api/public-product-select.ts` — public variant select/DTO now includes `id`,
+  `color`, `size` (also fixed a pre-existing gap: `id` wasn't exposed on the detail
+  endpoint's variants at all before this).
+- `components/admin/products/variants-section.tsx` — `ColorSizeVariantBuilder`'s
+  combination generator now carries structured `color`/`size` per row instead of only a
+  joined string; the color/size chip-seeding effect prefers structured data with a
+  legacy-parse fallback; the "Color Photos" grouping filter matches on `color` first;
+  `excludedCombos` now stores each removed combo's color/size so "Add back" doesn't need
+  to re-derive them.
+- `components/admin/products/product-form.tsx` — the post-create image fan-out matches
+  newly-created variants by `color` first.
+- `app/admin/products/[id]/edit/page.tsx` — passes `color`/`size` through into the edit
+  form's `defaultValues` (previously dropped, which would have starved the seeding effect
+  above of any structured data to prefer).
+- `package.json` — added the backfill script entry.
+
+### C. Database migration
+
+Additive only: `ALTER TABLE "ProductVariant" ADD COLUMN "color" TEXT, ADD COLUMN "size" TEXT;`
+Both nullable, no default constraint beyond NULL, no existing column/index/constraint
+touched, no data moved. No new indexes added — nothing in the current codebase queries
+variants by `color`/`size` yet (all current lookups are by `productId` with the full
+variant list already loaded, or by `variantId` directly), so per the master prompt's
+own instruction ("only add indexes if justified by actual query patterns, don't add
+unnecessary ones") this is deferred until a real query pattern needing one exists —
+most likely when the storefront's Color -> Size -> variant lookup is actually built.
+
+### D. Existing-data backfill
+
+`prisma/backfill-variant-color-size.ts` — for every existing variant lacking color/size
+(re-run safe: it never overwrites a row that already has either set):
+- `value` containing `" / "` -> split into `color`/`size` (this is the one place a split
+  is legitimate — it's a one-time historical migration of already-existing data, not a
+  live business-logic dependency).
+- Otherwise, single-axis `value` -> resolved via the parent Product's `variantType`
+  ("Colour" -> `color`; "Size" -> `size`) rather than guessed from the string alone.
+- Anything else (Material/custom variantType, or an unrecognized single-axis string) is
+  left as `color = null, size = null` and logged as a count for manual review, rather than
+  guessed.
+
+Confirmed the backfill script only ever writes `color`/`size` — it does not read or
+write `id`, `sku`, `value`, any of the five stock fields, `status`, `image`, `history`,
+or anything outside `ProductVariant`.
+
+### E. Product form
+
+Preserved: the two-step form -> preview -> create flow, the staged/immediate image
+upload split between create and edit mode, SKU auto-generation, sparse-combination
+handling (`excludedCombos`), stock inputs, and the overall visual structure — none of
+that changed. What changed is only the *data* the Color+Size builder now attaches to
+each row (`color`/`size` alongside `value`) and which field the color-grouping/fan-out
+logic matches on. `ColorOnlyVariants` (Bags) and `GenericVariantBuilder` (Material/
+custom/legacy) needed no UI changes at all — the server infers color-only/size-only for
+those from the product's `variantType` being a direct one-to-one mapping of the single
+`value` field, which is a field lookup, not string parsing.
+
+### F. API
+
+Public variant shape (`GET /api/v1/public/products/[slug]`) now returns, per variant:
+```json
+{
+  "id": "variant-id",
+  "sku": "GB-PEDRO-YELLOW-16",
+  "color": "Yellow",
+  "size": "16",
+  "value": "Yellow / 16",
+  "inStock": true,
+  "image": "https://..."
+}
+```
+`sku`, `value`, `inStock`, `image` are unchanged; `id`, `color`, `size` are new.
+
+### G. Stock protection
+
+`currentStock`/`reservedStock`/`soldStock`/`damagedStock`/`returnedStock`/
+`lowStockThreshold` are not referenced anywhere in this change outside their existing,
+unmodified code paths (`adjustVariantStock`, `checkStockAvailability`,
+`deductStockForOrder`, `cancelOrder` in `lib/orders/stock.ts` / `lib/actions/inventory.ts`
+/ `lib/actions/orders.ts` — none of those files were touched; confirmed via grep that none
+of them reference `.value` at all, since they always operate on `variantId`).
+`updateProduct`'s per-variant `update()` call writes only `value`, `color`, `size`,
+`status` — the same fields it already wrote before this change, plus the two new ones;
+stock changes still go exclusively through `adjustVariantStock`, which this task did not
+touch.
+
+### H. Cloudinary / images
+
+Unchanged: staged-selection-then-upload-on-create flow for new products, immediate
+fan-out upload for existing products, `ProductImage.variantId`'s 1:1 constraint, and the
+"one photo per colour, fanned out to every variant ID sharing that colour" approach
+(documented as SCHEMA GAP #19 above — still not resolved by this pass, since the master
+prompt scoped that as a separate future improvement, not part of Color+Size). What
+changed is only which field the fan-out and grouping logic matches variants by: `color`
+first, falling back to the old `value`-based check only for a variant that predates the
+backfill (defensive, not the intended steady-state path).
+
+### I. Best Sellers
+
+Not touched. `lib/actions/best-sellers.ts` and `lib/best-sellers/enforce-cap.ts` don't
+reference `.value`, `color`, or `size` in any way (confirmed via grep) and were not
+edited. No Best Seller UI changes (e.g. the separately-noted Bags-tab gap) were mixed
+into this task, per the master prompt's explicit instruction to keep that a separate
+Phase 9 item.
+
+### J. Backward compatibility
+
+Color-only, Size-only, Material/custom, and existing Color+Size products all continue to
+work without recreation: `deriveVariantColorSize` only fills `color`/`size` from
+structured input or from a direct `variantType` mapping — a Material/custom product's
+variants keep `color = null, size = null` and `value` stays exactly what the admin typed,
+same as before this change.
+
+### K. Build result
+
+**Not run.** This session has no network egress and no `node_modules` (the handoff ZIP
+intentionally excludes it, per its own instructions, and `npm install` cannot reach the
+registry in this sandboxed environment). `npm run build` needs to be run locally or in CI
+before this is merged — this is flagged explicitly rather than claimed as passing, per
+the master prompt's own "do not declare success if the build was not actually run" rule.
+Recommend: `npm install`, `npx prisma generate`, `npx prisma migrate dev` (or `deploy`)
+against a real database, `npm run prisma:backfill-variant-color-size`, then
+`npm run build`.
+
+### L. Remaining Phase 9 work
+
+**Completed:** schema + migration, backfill script, product create/update/duplicate write
+paths, admin Color+Size builder, public API exposure, edit-form data plumbing.
+
+**Intentionally deferred (this task, by design):**
+- The stock race condition noted in a previous inspection — explicitly out of scope
+  per the master prompt (§20).
+- New DB indexes on `(productId, color)` / `(productId, color, size)` — no current query
+  needs them yet (see §C above); add when the storefront's real query pattern lands.
+- `VariantColorGroup`-style dedicated color-image model (SCHEMA GAP #19, pre-existing) —
+  the master prompt explicitly scoped this out of Color+Size.
+
+**Separate, not-yet-started Phase 9 tasks (explicitly out of scope for this pass):**
+- Best Sellers Bags-tab UI verification/addition.
+- Desktop admin notifications.
+- Storefront-side Color -> Size -> variant selection UI and low-stock/out-of-stock
+  messaging (this repo now exposes the structured data the storefront needs for that;
+  the storefront itself lives outside this repository).
+
+### Testing Checklist
+
+Everything below is a **plan**, not a completed test — untestable in this sandbox
+without a database or `node_modules`. Before merging, verify:
+
+1. `npm run build` passes.
+2. Create a Shoe/Slipper with Colour+Size — Yellow/Red x 16/17/18, excluding Red/17 —
+   confirm exactly those 5 combinations save with correct `color`/`size`, and Red/17
+   does not exist.
+3. Set per-combination stock (Yellow/16=3, Yellow/17=5, Yellow/18=0, Red/16=4, Red/18=2),
+   simulate a Yellow/17 x2 order via `adjustVariantStock`/order flow, confirm only
+   Yellow/17 changes (5 -> 3) and every other combination's stock is untouched.
+4. Confirm the public API returns `id`/`color`/`size` alongside the existing fields for
+   each variant.
+5. Confirm Yellow's color photo still fans out to Yellow/16, Yellow/17, Yellow/18 (and
+   Red's to Red/16, Red/18) after creation and after edit.
+6. Open an existing (pre-Phase-9) Colour+Size product created before this change —
+   confirm color/size seed correctly after running the backfill script, and that stock/
+   SKU/images are all still correct.
+7. Confirm a Bag (Colour-only), a Size-only product, and a Material/custom product all
+   still save and edit correctly with no forced recreation.
+8. Confirm Best Sellers still loads and behaves identically for Bags/Shoes/Slippers.
+
+---
+
 ## Build fix: stale `productId`/`variantId` props on `VariantRow`
 
 Real `npm run build` reported a genuine TypeScript error (not a static/balance check —

@@ -19,6 +19,16 @@ export const specSchema = z.object({
 export const variantSchema = z.object({
   id: z.string().optional(),
   value: z.string().min(1, "Variant value is required"),
+  // Structured Color x Size fields (Phase 9) — set directly by the
+  // Colour+Size builder when it already knows the color/size that make up
+  // a combination, so the server never has to re-derive them by parsing
+  // `value`. Optional/nullable: Bag (Colour-only) and generic/custom
+  // variant types don't send these — the server infers color-only /
+  // size-only from the product's variantType instead (see
+  // lib/actions/products.ts), and Material/custom types correctly leave
+  // both null.
+  color: z.string().trim().min(1).optional().nullable(),
+  size: z.string().trim().min(1).optional().nullable(),
   sku: z.string().optional().default(""),
   stock: z.coerce.number().int().min(0).default(0),
   status: z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]).default("ACTIVE"),
@@ -100,7 +110,22 @@ export const productSchema = z
   .refine((data) => data.hasVariants || data.variants.length === 0, {
     message: "Variants were added but 'Has Variants' is off — turn it on, or remove the variants.",
     path: ["hasVariants"],
-  });
+  })
+  // Phase 9 structured-data validation rule (master prompt §28): a
+  // Colour + Size product's variants must each carry BOTH a color and a
+  // size — never a bare combined string with nothing structured behind
+  // it. Colour-only, Size-only, and Material/custom variantTypes aren't
+  // constrained here since color/size are legitimately absent for those.
+  .refine(
+    (data) =>
+      !data.hasVariants ||
+      data.variantType !== "Colour + Size" ||
+      data.variants.every((v) => !!v.color?.trim() && !!v.size?.trim()),
+    {
+      message: "Every Colour + Size variant needs both a color and a size.",
+      path: ["variants"],
+    }
+  );
 
 export type ProductInput = z.infer<typeof productSchema>;
 export type VariantInput = z.infer<typeof variantSchema>;

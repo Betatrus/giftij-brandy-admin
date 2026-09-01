@@ -174,8 +174,13 @@ export function ProductForm({
           uploadQueue.push({ file: staged.file, target: { kind: "product" } });
         }
         for (const [color, staged] of Object.entries(stagedVariantImages)) {
+          // Structured `color` is the primary match (see createProduct's
+          // return shape in lib/actions/products.ts) — the `value`-based
+          // check only still applies to a legacy/Material row without one.
           const variantIdsForColor = created.variants
-            .filter((v) => v.value === color || v.value.startsWith(`${color} / `))
+            .filter(
+              (v) => v.color === color || (!v.color && (v.value === color || v.value.startsWith(`${color} / `)))
+            )
             .map((v) => v.id);
           for (const variantId of variantIdsForColor) {
             uploadQueue.push({ file: staged.file, target: { kind: "variant", variantId } });

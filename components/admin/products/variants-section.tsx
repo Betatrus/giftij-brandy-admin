@@ -23,13 +23,17 @@ type CategoryOption = { id: string; name: string; slug: string; parentId: string
  *                       anything outside the three launch categories
  *
  * All three modes write into the same `variants` field array and the same
- * `variantType` string field — the schema doesn't know or care which mode
- * produced a row (see prisma/schema.prisma: ProductVariant.value is a
- * single generic string). This is a deliberate MVP choice: Color+Size
- * combinations are represented as a single concatenated value
- * ("Yellow / 7") rather than two separate columns. Flagged in CHANGES.md
- * as a SCHEMA GAP for the Phase 8 reconciliation (a real two-dimension
- * variant-option model would replace this).
+ * `variantType` string field. As of Phase 9, `ProductVariant` also has
+ * structured `color`/`size` columns (prisma/schema.prisma) alongside the
+ * display string `value` — ColorSizeVariantBuilder below sets `color`/
+ * `size` directly on each row when it builds a combination, rather than
+ * the server having to re-derive them by parsing "Yellow / 7" back apart.
+ * ColorOnlyVariants and GenericVariantBuilder don't set color/size
+ * themselves — for those, the server infers color-only/size-only from
+ * the product's variantType ("Colour" / "Size") being a direct mapping of
+ * the single `value`, not string parsing (see lib/actions/products.ts's
+ * deriveVariantColorSize). Still deliberately NOT a generalized
+ * variant-option engine — just these two extra columns.
  */
 export function VariantsSection({
   productId,
@@ -331,16 +335,21 @@ function ColorSizeVariantBuilder({
   // Without this, generateCombinations() would always rebuild the FULL
   // colour×size cross-product every time it runs, undoing any earlier
   // removal the moment the admin touched the colour/size lists again.
-  const [excludedCombos, setExcludedCombos] = useState<Set<string>>(new Set());
+  // Keyed by `value` (still a fine UI-only key); stores that removed
+  // combo's structured color/size so "Add back" (below) can restore it
+  // without re-deriving anything.
+  const [excludedCombos, setExcludedCombos] = useState<Map<string, { color: string | null; size: string | null }>>(
+    new Map()
+  );
 
-  // On first load of an existing product, reconstruct the color/size
-  // chip lists by parsing already-saved combination values ("Yellow / 7"
-  // -> color "Yellow", size "7"). This is a best-effort MVP heuristic —
-  // the database only stores the combined string (see the schema-gap
-  // note above), so a product whose variants were entered before this
-  // builder existed, or with unusual formatting, may need its chips
-  // re-entered manually. It never discards existing variant rows either
-  // way; it only seeds the editing UI.
+  // On first load of an existing product, reconstruct the color/size chip
+  // lists. Phase 9: prefer each row's structured `color`/`size` columns
+  // directly — no parsing needed, since that's exactly what they're for.
+  // Legacy fallback (pre-Phase-9 data that hasn't been through the
+  // backfill yet) parses the combined `value` string as a best-effort UI
+  // seed only — it never determines transactional identity, and the save
+  // path always persists via `color`/`size` going forward regardless of
+  // which branch seeded the chips.
   useEffect(() => {
     if (seeded) return;
     const existing = (variants ?? []).filter((v) => v.value);
@@ -350,27 +359,40 @@ function ColorSizeVariantBuilder({
     }
     const colorSet = new Set<string>();
     const sizeSet = new Set<string>();
-    let anyCombo = false;
-    for (const v of existing) {
-      if (v.value.includes(" / ")) {
-        anyCombo = true;
-        const [c, s] = v.value.split(" / ").map((p) => p.trim());
-        if (c) colorSet.add(c);
-        if (s) sizeSet.add(s);
+    const hasStructuredData = existing.some((v) => v.color || v.size);
+
+    if (hasStructuredData) {
+      for (const v of existing) {
+        if (v.color) colorSet.add(v.color);
+        if (v.size) sizeSet.add(v.size);
       }
-    }
-    if (anyCombo) {
-      setUseColor(true);
-      setUseSize(true);
+      setUseColor(existing.some((v) => v.color));
+      setUseSize(existing.some((v) => v.size));
       setColors(Array.from(colorSet));
       setSizes(Array.from(sizeSet));
     } else {
-      // Single-axis existing data — treat every existing value as a color
-      // by default (the common case); the admin can switch to Size if
-      // that's what these actually were.
-      setUseColor(true);
-      setUseSize(false);
-      setColors(existing.map((v) => v.value));
+      let anyCombo = false;
+      for (const v of existing) {
+        if (v.value.includes(" / ")) {
+          anyCombo = true;
+          const [c, s] = v.value.split(" / ").map((p) => p.trim());
+          if (c) colorSet.add(c);
+          if (s) sizeSet.add(s);
+        }
+      }
+      if (anyCombo) {
+        setUseColor(true);
+        setUseSize(true);
+        setColors(Array.from(colorSet));
+        setSizes(Array.from(sizeSet));
+      } else {
+        // Single-axis existing data — treat every existing value as a
+        // color by default (the common case); the admin can switch to
+        // Size if that's what these actually were.
+        setUseColor(true);
+        setUseSize(false);
+        setColors(existing.map((v) => v.value));
+      }
     }
     setSeeded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -398,26 +420,31 @@ function ColorSizeVariantBuilder({
   // only brand-new combinations start at 0 stock, and combinations no
   // longer selected are dropped from the array (which the existing
   // create/update diff logic in lib/actions/products.ts then archives,
-  // same as manually removing a row).
+  // same as manually removing a row). Each combo carries its own
+  // structured color/size straight from the chip lists — never
+  // reconstructed later by parsing the joined `value` string.
   function generateCombinations() {
     const existingByValue = new Map((variants ?? []).map((v) => [v.value, v]));
-    let combos: string[] = [];
+    let combos: { value: string; color: string | null; size: string | null }[] = [];
 
     if (useColor && useSize && colors.length > 0 && sizes.length > 0) {
-      for (const c of colors) for (const s of sizes) combos.push(`${c} / ${s}`);
+      for (const c of colors)
+        for (const s of sizes) combos.push({ value: `${c} / ${s}`, color: c, size: s });
     } else if (useColor && colors.length > 0) {
-      combos = [...colors];
+      combos = colors.map((c) => ({ value: c, color: c, size: null }));
     } else if (useSize && sizes.length > 0) {
-      combos = [...sizes];
+      combos = sizes.map((s) => ({ value: s, color: null, size: s }));
     }
 
     // Never re-include a combination the admin explicitly removed — see
     // the excludedCombos state declaration above for why this matters.
-    combos = combos.filter((value) => !excludedCombos.has(value));
+    combos = combos.filter((combo) => !excludedCombos.has(combo.value));
 
-    const nextVariants: VariantInput[] = combos.map((value) => {
-      const existing = existingByValue.get(value);
-      return existing ?? { value, sku: "", stock: 0, status: "ACTIVE" as const };
+    const nextVariants: VariantInput[] = combos.map((combo) => {
+      const existing = existingByValue.get(combo.value);
+      return existing
+        ? { ...existing, color: combo.color, size: combo.size }
+        : { value: combo.value, color: combo.color, size: combo.size, sku: "", stock: 0, status: "ACTIVE" as const };
     });
 
     setVariantType(useColor && useSize ? "Colour + Size" : useColor ? "Colour" : "Size");
@@ -497,13 +524,18 @@ function ColorSizeVariantBuilder({
           </p>
           <div className="grid sm:grid-cols-2 gap-3">
             {colors.map((color) => {
+              // Structured `color` field is the primary match now; the
+              // `value`-based check only still applies to a legacy row
+              // that predates the backfill (defensive, not the normal
+              // path — every row generated by this builder now carries
+              // `color` directly).
+              const matchesColor = (v: VariantInput) =>
+                v.color === color || (!v.color && (v.value === color || v.value.startsWith(`${color} / `)));
               const variantIdsForColor = (variants ?? [])
-                .filter((v) => v.value === color || v.value.startsWith(`${color} / `))
+                .filter(matchesColor)
                 .map((v) => v.id)
                 .filter((id): id is string => !!id);
-              const existingForColor = (variants ?? []).find(
-                (v) => v.value === color || v.value.startsWith(`${color} / `)
-              );
+              const existingForColor = (variants ?? []).find(matchesColor);
               return (
                 <VariantImageSlot
                   key={color}
@@ -548,7 +580,11 @@ function ColorSizeVariantBuilder({
                 // (see excludedCombos above) BEFORE dropping it from the
                 // array — so clicking "Generate Combinations" again,
                 // e.g. after adding one more colour, won't bring it back.
-                setExcludedCombos((prev) => new Set(prev).add(v.value));
+                // Stores its color/size too, so "Add back" can restore it
+                // without re-deriving anything.
+                setExcludedCombos((prev) =>
+                  new Map(prev).set(v.value, { color: v.color ?? null, size: v.size ?? null })
+                );
                 const next = (variants ?? []).filter((_, i) => i !== index);
                 replace(next);
               }}
@@ -563,7 +599,7 @@ function ColorSizeVariantBuilder({
             Removed — won't be included when you generate combinations again:
           </p>
           <div className="flex flex-wrap gap-2">
-            {Array.from(excludedCombos).map((value) => (
+            {Array.from(excludedCombos.entries()).map(([value, meta]) => (
               <button
                 key={value}
                 type="button"
@@ -573,11 +609,14 @@ function ColorSizeVariantBuilder({
                   // regenerate (which could also pull in other, unrelated
                   // new combinations the admin isn't ready for yet).
                   setExcludedCombos((prev) => {
-                    const next = new Set(prev);
+                    const next = new Map(prev);
                     next.delete(value);
                     return next;
                   });
-                  replace([...(variants ?? []), { value, sku: "", stock: 0, status: "ACTIVE" as const }]);
+                  replace([
+                    ...(variants ?? []),
+                    { value, color: meta.color, size: meta.size, sku: "", stock: 0, status: "ACTIVE" as const },
+                  ]);
                 }}
                 className="flex items-center gap-1.5 bg-cream/60 text-ink/60 text-xs font-body px-2.5 py-1 rounded-full hover:bg-cream"
               >
