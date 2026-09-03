@@ -34,6 +34,14 @@ type CategoryOption = { id: string; name: string; slug: string; parentId: string
  * the single `value`, not string parsing (see lib/actions/products.ts's
  * deriveVariantColorSize). Still deliberately NOT a generalized
  * variant-option engine — just these two extra columns.
+ *
+ * UI correction: ColorSizeVariantBuilder's generated-combinations list
+ * renders each row through ColorSizeCombinationRow (below ChipInput in
+ * this file), which shows Color/Size/SKU/Stock as their own labeled
+ * fields — `value` ("Yellow / 16") is no longer the admin-facing
+ * representation there, just the server-derived string still saved
+ * alongside color/size for display/back-compat elsewhere (order history,
+ * reports, the public API's `value` field).
  */
 export function VariantsSection({
   productId,
@@ -570,11 +578,12 @@ function ColorSizeVariantBuilder({
             <span className="text-ink/40">— set stock for each</span>
           </label>
           {(variants ?? []).map((v, index) => (
-            <VariantRow
+            <ColorSizeCombinationRow
               key={v.id ?? v.value}
+              v={v}
               index={index}
-              valuePlaceholder=""
-              valueReadOnly
+              showColor={useColor}
+              showSize={useSize}
               onRemove={() => {
                 // Marks this exact combination as deliberately excluded
                 // (see excludedCombos above) BEFORE dropping it from the
@@ -626,6 +635,88 @@ function ColorSizeVariantBuilder({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// Structured Color x Size combination row (Phase 9 UI correction).
+//
+// The Colour+Size builder's generated rows already carry structured
+// `color`/`size` on each VariantInput (see generateCombinations above) —
+// this row displays THOSE fields directly, as their own labeled columns,
+// instead of a single combined "Value" text input showing "Yellow / 16".
+// `value` is still what actually gets validated/saved (server-derived
+// from color/size — see lib/actions/products.ts), so it isn't removed
+// from the data, just no longer the primary thing the admin looks at.
+//
+// Color/Size are shown as plain read-only text, not registered inputs —
+// they're generated FROM the Colors/Sizes chip lists above, never typed
+// per-row, so there's nothing for the admin to edit here directly (to
+// change a color/size, edit the chips and regenerate). Only Stock stays
+// an editable, registered field, same as every other variant row in this
+// file. SKU is shown read-only once it exists (post-save) and otherwise
+// omitted — it remains auto-generated server-side, exactly as before;
+// this only makes an already-generated SKU visible, it doesn't add an
+// editable SKU field.
+// ============================================================
+
+function ColorSizeCombinationRow({
+  v,
+  index,
+  showColor,
+  showSize,
+  onRemove,
+}: {
+  v: VariantInput;
+  index: number;
+  showColor: boolean;
+  showSize: boolean;
+  onRemove: () => void;
+}) {
+  const { register } = useFormContext<ProductInput>();
+
+  // Legacy fallback for a pre-Phase-9 row being edited before the backfill
+  // has run against it: no structured color/size yet, so fall back to
+  // showing the raw combined value in whichever single column applies.
+  // Never used to decide what gets saved — display only.
+  const colorDisplay = v.color ?? (showColor && !showSize ? v.value : null);
+  const sizeDisplay = v.size ?? (showSize && !showColor ? v.value : null);
+
+  return (
+    <div className="border border-cream rounded-xl p-3 flex gap-3 items-center">
+      <div className="flex-1 grid grid-cols-2 sm:grid-cols-4 gap-3 items-end">
+        {showColor && (
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-ink/40 font-body mb-1">Color</p>
+            <p className="text-sm font-body text-ink truncate">{colorDisplay || "—"}</p>
+          </div>
+        )}
+        {showSize && (
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-ink/40 font-body mb-1">Size</p>
+            <p className="text-sm font-body text-ink truncate">{sizeDisplay || "—"}</p>
+          </div>
+        )}
+        {v.sku && (
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-ink/40 font-body mb-1">SKU</p>
+            <p className="text-xs font-body text-ink/60 truncate">{v.sku}</p>
+          </div>
+        )}
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-ink/40 font-body mb-1">Stock</p>
+          <input
+            type="number"
+            {...register(`variants.${index}.stock` as const)}
+            className="w-full rounded-lg border border-cream px-2 py-1.5 text-sm font-body"
+          />
+        </div>
+      </div>
+
+      <button type="button" onClick={onRemove} className="text-ink/40 hover:text-red-600 shrink-0">
+        <Trash2 size={16} />
+      </button>
     </div>
   );
 }
