@@ -13,6 +13,7 @@ import { ImageUploader } from "./image-uploader";
 import { StagedImagePicker, fileToBase64, type StagedImage } from "./staged-image-picker";
 import { CategorySelect } from "./category-select";
 import { ProductPreview } from "./product-preview";
+import { ProductSaveResultDialog } from "./product-save-result-dialog";
 import { useUnsavedChanges } from "@/lib/context/unsaved-changes-context";
 
 type ExistingImage = { id: string; url: string; sortOrder: number };
@@ -64,6 +65,15 @@ export function ProductForm({
   // acceptable," per the confirmed flow, as long as it's ONE continuous
   // process the admin doesn't have to leave and come back to.
   const [uploadStatus, setUploadStatus] = useState<{ done: number; total: number } | null>(null);
+
+  // Set once at the very end of a successful onSubmit — after
+  // create/update AND (for a new product) every staged photo upload has
+  // fully resolved. Drives the success/partial-failure dialog; null
+  // means "don't show it," including for the whole duration any saving/
+  // uploading is still in progress.
+  const [saveResult, setSaveResult] = useState<
+    null | { kind: "created"; productId: string; failedPhotoCount: number } | { kind: "updated" }
+  >(null);
 
   const form = useForm<ProductInput>({
     resolver: zodResolver(productSchema),
@@ -157,17 +167,21 @@ export function ProductForm({
         await updateProduct(productId, data);
         setDirty(false); // saved — no longer unsaved, don't prompt on the refresh below
         router.refresh();
+        setSaveResult({ kind: "updated" });
       } else {
         const created = await createProduct(data);
         setDirty(false); // saved — don't prompt on the redirect to the new product's edit page
 
         // Build the full upload queue up front — general product photos
-        // AND staged variant photos (fanned out to every real variant ID
-        // sharing that colour, since ProductImage.variantId is 1:1 — see
-        // variant-image-slot.tsx's top comment) — so the progress
-        // indicator reflects everything that's about to happen, not
-        // just the general gallery.
-        type QueuedUpload = { kind: "product" } | { kind: "variant"; variantId: string };
+        // AND staged variant photos — so the progress indicator reflects
+        // everything that's about to happen, not just the general
+        // gallery. One queue entry per COLOUR (not per size variant
+        // sharing that colour): uploadVariantImage takes the whole
+        // variantIds group and does one physical Cloudinary upload,
+        // fanned out to one ProductImage row per variant — see that
+        // action's comment. Queuing one entry per variant here would
+        // reproduce the exact duplicate-upload bug this fixes.
+        type QueuedUpload = { kind: "product" } | { kind: "variant"; variantIds: string[] };
         const uploadQueue: { file: File; target: QueuedUpload }[] = [];
 
         for (const staged of stagedImages) {
@@ -182,8 +196,8 @@ export function ProductForm({
               (v) => v.color === color || (!v.color && (v.value === color || v.value.startsWith(`${color} / `)))
             )
             .map((v) => v.id);
-          for (const variantId of variantIdsForColor) {
-            uploadQueue.push({ file: staged.file, target: { kind: "variant", variantId } });
+          if (variantIdsForColor.length > 0) {
+            uploadQueue.push({ file: staged.file, target: { kind: "variant", variantIds: variantIdsForColor } });
           }
         }
 
@@ -197,7 +211,7 @@ export function ProductForm({
               if (target.kind === "product") {
                 await uploadProductImage({ productId: created.id, fileBase64: base64 });
               } else {
-                await uploadVariantImage({ variantId: target.variantId, productId: created.id, fileBase64: base64 });
+                await uploadVariantImage({ variantIds: target.variantIds, productId: created.id, fileBase64: base64 });
               }
             } catch {
               failedCount++;
@@ -206,9 +220,15 @@ export function ProductForm({
           }
         }
 
-        router.push(
-          `/admin/products/${created.id}/edit${failedCount > 0 ? `?photosFailed=${failedCount}` : ""}`
-        );
+        // The success/partial-failure dialog takes over from here — no
+        // automatic redirect. "Edit Product"/"Review Photos" navigates
+        // to the edit page (with the existing ?photosFailed=N banner
+        // still intact for a partial failure); "Return to Products"
+        // goes to the list. Either way the admin decides, once they've
+        // actually seen the result — this must not fire until this
+        // exact point, after every staged photo has been uploaded (or
+        // failed) to Cloudinary.
+        setSaveResult({ kind: "created", productId: created.id, failedPhotoCount: failedCount });
       }
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
@@ -229,18 +249,36 @@ export function ProductForm({
 
   if (step === "preview") {
     return (
-      <ProductPreview
-        values={getValues()}
-        categories={categories}
-        existingImages={existingImages}
-        stagedImages={stagedImages}
-        isEditing={!!productId}
-        saving={saving}
-        saveLabel={saveLabel}
-        serverError={serverError}
-        onEdit={() => setStep("form")}
-        onConfirm={handleSubmit(onSubmit)}
-      />
+      <>
+        <ProductPreview
+          values={getValues()}
+          categories={categories}
+          existingImages={existingImages}
+          stagedImages={stagedImages}
+          isEditing={!!productId}
+          saving={saving}
+          saveLabel={saveLabel}
+          serverError={serverError}
+          onEdit={() => setStep("form")}
+          onConfirm={handleSubmit(onSubmit)}
+        />
+        <ProductSaveResultDialog
+          result={saveResult}
+          onPrimaryAction={() => {
+            if (saveResult?.kind === "created") {
+              router.push(
+                `/admin/products/${saveResult.productId}/edit${
+                  saveResult.failedPhotoCount > 0 ? `?photosFailed=${saveResult.failedPhotoCount}` : ""
+                }`
+              );
+            } else {
+              setSaveResult(null);
+              setStep("form"); // "Continue Editing" — back to the editable form, not the read-only preview
+            }
+          }}
+          onReturnToProducts={() => router.push("/admin/products")}
+        />
+      </>
     );
   }
 

@@ -2,11 +2,12 @@ import { auth } from "@/auth";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 import { ChangePasswordForm } from "@/components/admin/settings/change-password-form";
+import { CustomerCareWhatsAppForm } from "@/components/admin/settings/customer-care-whatsapp-form";
 
 export default async function SettingsPage() {
   const session = await auth();
   const isSuperAdmin = session?.user?.role === "SUPER_ADMIN";
-  const whatsapp = getCustomerCareWhatsApp();
+  const whatsapp = isSuperAdmin ? await getCustomerCareWhatsApp() : null;
 
   return (
     <div>
@@ -29,14 +30,7 @@ export default async function SettingsPage() {
             <p className="font-body text-xs text-ink/50 mb-3">
               Shown to customers when something they want is low or out of stock.
             </p>
-            {whatsapp ? (
-              <p className="font-body text-sm text-ink bg-cream/40 rounded-xl px-3 py-2">+{whatsapp}</p>
-            ) : (
-              <p className="font-body text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
-                Not set up yet — ask whoever manages the store's technical setup to add a
-                WhatsApp number.
-              </p>
-            )}
+            <CustomerCareWhatsAppForm initialNumber={whatsapp} />
           </section>
         )}
 

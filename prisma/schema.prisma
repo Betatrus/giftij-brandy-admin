@@ -527,3 +527,26 @@ model Campaign {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 }
+
+// ============================================================
+// STORE SETTINGS
+// ============================================================
+
+/// Singleton store-level settings row — `id` is always the fixed string
+/// "singleton", so there is exactly one row, ever (upserted, never
+/// created a second time). Deliberately a plain table with named columns
+/// rather than a generic key-value config table: there is exactly one
+/// store-level setting needed right now (Customer Care WhatsApp). If
+/// more show up later, add columns here first; only reach for a
+/// key-value shape if that stops being enough — building it now would be
+/// the same kind of premature generalization Phase 9 explicitly avoided
+/// for ProductVariant.
+model StoreSettings {
+  id                   String   @id @default("singleton")
+  /// Shown to customers when something they want is low or out of
+  /// stock — see lib/config/customer-care.ts. Null/absent until an admin
+  /// sets it from Settings; no default number is ever hardcoded.
+  customerCareWhatsApp String?
+  updatedAt            DateTime @updatedAt
+}
+

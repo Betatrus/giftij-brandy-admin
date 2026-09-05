@@ -5,13 +5,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { StaffRole } from "@prisma/client";
-import { listProducts, archiveProduct, deleteProduct, duplicateProduct } from "@/lib/actions/products";
+import { listProducts, archiveProduct, deleteProduct } from "@/lib/actions/products";
 import { SearchInput } from "@/components/ui/search-input";
 import { Pagination } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CategoryFilterTabs } from "@/components/admin/shared/category-filter-tabs";
-import { Copy } from "lucide-react";
 import { getStockStatus, stockStatusBadgeTone, STOCK_STATUS_LABELS } from "@/lib/utils/stock-status";
 
 type ProductRow = {
@@ -62,7 +61,6 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
   const [selected, setSelected] = useState<string[]>([]);
   const [confirmTarget, setConfirmTarget] = useState<{ id: string; mode: "archive" | "delete" } | null>(null);
   const [isPending, setIsPending] = useState(false);
-  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Filters live in the URL, not plain component state — so the browser's
@@ -152,20 +150,6 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
       setActionError(err instanceof Error ? err.message : "That action failed. Please try again.");
     } finally {
       setIsPending(false);
-    }
-  }
-
-  async function handleDuplicate(id: string) {
-    setActionError(null);
-    setDuplicatingId(id);
-    try {
-      const newId = await duplicateProduct(id);
-      // Straight to editing the copy — the whole point is changing
-      // Name/Images/SKU right away, not sitting back on the list.
-      router.push(`/admin/products/${newId}/edit`);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to duplicate product.");
-      setDuplicatingId(null);
     }
   }
 
@@ -315,13 +299,12 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       {canWrite && (
-                        <button
-                          onClick={() => handleDuplicate(p.id)}
-                          disabled={duplicatingId === p.id}
-                          className="text-ink/50 hover:text-ink text-xs underline mr-3 disabled:opacity-50"
+                        <Link
+                          href={`/admin/products/${p.id}/edit`}
+                          className="text-ink/50 hover:text-ink text-xs underline mr-3"
                         >
-                          {duplicatingId === p.id ? "Duplicating..." : "Duplicate"}
-                        </button>
+                          Edit
+                        </Link>
                       )}
                       {canWrite && p.status !== "ARCHIVED" && (
                         <button
@@ -410,17 +393,6 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                       <Link href={`/admin/products/${p.id}/edit`} className="text-gold">
                         Edit
                       </Link>
-                      <Link href={`/admin/products/${p.id}/edit`} className="text-ink/60">
-                        View
-                      </Link>
-                      <button
-                        onClick={() => handleDuplicate(p.id)}
-                        disabled={duplicatingId === p.id}
-                        className="text-ink/60 flex items-center gap-1 disabled:opacity-50"
-                      >
-                        <Copy size={12} />
-                        {duplicatingId === p.id ? "Duplicating..." : "Duplicate"}
-                      </button>
                       {p.status !== "ARCHIVED" && (
                         <button
                           onClick={() => setConfirmTarget({ id: p.id, mode: "archive" })}

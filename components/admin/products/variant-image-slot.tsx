@@ -19,14 +19,16 @@ import { fileToBase64, type StagedImage } from "./staged-image-picker";
  *   that file's onSubmit for the color -> variant-ids fan-out.
  *
  *   EDIT (productId exists): selecting a file uploads immediately, via
- *   the EXISTING uploadVariantImage action, to EVERY real variantId in
- *   `variantIds` — for a colour shared across several sizes, this means
- *   one admin action re-uploads the same photo to each of that colour's
- *   size variants, which is how "one colour photo" is represented
- *   without a schema change (ProductImage.variantId is a real 1:1 —
- *   see that model's own comment in prisma/schema.prisma). Uploading
- *   again always replaces the previous image (uploadVariantImage
- *   already deletes the old Cloudinary asset first) — satisfies
+ *   the EXISTING uploadVariantImage action, ONCE for the whole colour —
+ *   passing every real variantId in `variantIds` in a single call. The
+ *   action uploads the physical file to Cloudinary exactly once and
+ *   creates one ProductImage row per variant, all pointing at that same
+ *   asset — this is how "one colour photo" is represented without a
+ *   schema change (ProductImage.variantId is a real 1:1 — see that
+ *   model's own comment in prisma/schema.prisma), and without the
+ *   colour's file actually being re-uploaded once per size sharing it.
+ *   Uploading again always replaces the previous image (uploadVariantImage
+ *   already deletes the old Cloudinary asset(s) first) — satisfies
  *   "update/delete/replace the corresponding Cloudinary asset."
  */
 export function VariantImageSlot({
@@ -60,16 +62,11 @@ export function VariantImageSlot({
     setUploadError(null);
     try {
       const base64 = await fileToBase64(file);
-      // Fan-out: the same photo is uploaded once per real variant ID
-      // sharing this colour (see the top comment). Sequential, not
-      // Promise.all, so a partial failure leaves a clear, small,
-      // specific error rather than a pile of simultaneous ones.
-      let lastUrl: string | null = null;
-      for (const variantId of variantIds) {
-        const image = await uploadVariantImage({ variantId, productId, fileBase64: base64 });
-        lastUrl = image.url;
-      }
-      setUploadedUrl(lastUrl);
+      // ONE upload for the whole colour — see the top comment. The
+      // physical file is only ever sent to Cloudinary once here,
+      // regardless of how many sizes this colour has.
+      const image = await uploadVariantImage({ variantIds, productId, fileBase64: base64 });
+      setUploadedUrl(image.url);
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed.");
     } finally {

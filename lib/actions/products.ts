@@ -283,6 +283,35 @@ export async function updateProduct(id: string, input: ProductInput) {
   });
   const willArchiveAllVariants = existingVariantCount > 0 && !parsed.hasVariants;
 
+  // ------------------------------------------------------------------
+  // Precompute everything that needs an extra DB round trip BEFORE the
+  // transaction opens — mirrors createProduct's existing pattern. This is
+  // specifically the SKU-uniqueness lookup for brand-new variant rows
+  // (autoVariantSku), which used to run INSIDE the transaction callback,
+  // via the plain global `prisma` client rather than `tx`. It never
+  // needed to be inside the atomic boundary — only its RESULT (the
+  // chosen sku) needs to be there — but leaving it inside still extended
+  // how long the transaction's underlying connection was held, since the
+  // interactive-transaction timeout counts the callback's whole
+  // wall-clock duration, not just the queries issued through `tx`. This
+  // was the single biggest contributor to the timeout on a Color+Size
+  // product with several new rows, since each one blocked the next.
+  // ------------------------------------------------------------------
+  const preparedVariants = parsed.hasVariants
+    ? await Promise.all(
+        parsed.variants.map(async (v) => {
+          const colorSize = deriveVariantColorSize(v, parsed.variantType);
+          const value = deriveVariantValue(v, colorSize);
+          const variantSku = v.id
+            ? undefined // existing row — sku is never touched on update, see below
+            : v.sku?.trim()
+            ? v.sku.trim()
+            : await autoVariantSku(sku, value);
+          return { v, colorSize, value, sku: variantSku };
+        })
+      )
+    : [];
+
   await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     await tx.product.update({
       where: { id },
@@ -313,18 +342,29 @@ export async function updateProduct(id: string, input: ProductInput) {
 
     // Specs: ID-preserving diff — update existing rows in place (matched
     // by id), create new ones (no id), delete ones that were removed.
+    // Existing-row updates still run one `tx` call per row (each has
+    // different label/value, so they can't be merged into one
+    // statement) but now run CONCURRENTLY via Promise.all instead of a
+    // sequential for-loop — same queries, same data, just not blocking
+    // each other one-at-a-time. New rows are batched into a single
+    // createMany instead of one create() per row.
     const existingSpecs: ProductSpec[] = await tx.productSpec.findMany({ where: { productId: id } });
     const keepSpecIds = parsed.specs.filter((s) => s.id).map((s) => s.id as string);
     const specsToDelete = existingSpecs.filter((s: ProductSpec) => !keepSpecIds.includes(s.id));
     if (specsToDelete.length) {
       await tx.productSpec.deleteMany({ where: { id: { in: specsToDelete.map((s: ProductSpec) => s.id) } } });
     }
-    for (const s of parsed.specs) {
-      if (s.id) {
-        await tx.productSpec.update({ where: { id: s.id }, data: { label: s.label, value: s.value } });
-      } else {
-        await tx.productSpec.create({ data: { productId: id, label: s.label, value: s.value } });
-      }
+    const specUpdates = parsed.specs.filter((s) => s.id);
+    const specCreates = parsed.specs.filter((s) => !s.id);
+    await Promise.all(
+      specUpdates.map((s) =>
+        tx.productSpec.update({ where: { id: s.id as string }, data: { label: s.label, value: s.value } })
+      )
+    );
+    if (specCreates.length) {
+      await tx.productSpec.createMany({
+        data: specCreates.map((s) => ({ productId: id, label: s.label, value: s.value })),
+      });
     }
 
     if (parsed.hasVariants) {
@@ -340,11 +380,17 @@ export async function updateProduct(id: string, input: ProductInput) {
         });
       }
 
-      for (const v of parsed.variants) {
-        const colorSize = deriveVariantColorSize(v, parsed.variantType);
-        const value = deriveVariantValue(v, colorSize);
+      // Same treatment as specs above: existing rows still need one
+      // `update()` call each (different id + data per row), now run
+      // concurrently via Promise.all; brand-new rows are batched into a
+      // single createMany using the sku/value/color/size already
+      // resolved in preparedVariants, above, before the transaction
+      // opened.
+      const toUpdate = preparedVariants.filter((p) => p.v.id);
+      const toCreate = preparedVariants.filter((p) => !p.v.id);
 
-        if (v.id) {
+      await Promise.all(
+        toUpdate.map(({ v, colorSize, value }) =>
           // Deliberately NOT touching currentStock/reservedStock/etc.
           // here — stock changes go through adjustVariantStock only, so
           // there's always exactly one code path that mutates stock and
@@ -353,23 +399,25 @@ export async function updateProduct(id: string, input: ProductInput) {
           // sku also isn't touched on an existing row — it was already
           // auto-generated once at creation and shouldn't shift under a
           // variant that may already be referenced by past OrderItems.
-          await tx.productVariant.update({
-            where: { id: v.id },
+          tx.productVariant.update({
+            where: { id: v.id as string },
             data: { value, color: colorSize.color, size: colorSize.size, status: v.status },
-          });
-        } else {
-          await tx.productVariant.create({
-            data: {
-              productId: id,
-              value,
-              color: colorSize.color,
-              size: colorSize.size,
-              sku: v.sku?.trim() ? v.sku.trim() : await autoVariantSku(sku, value),
-              currentStock: v.stock,
-              status: v.status,
-            },
-          });
-        }
+          })
+        )
+      );
+
+      if (toCreate.length) {
+        await tx.productVariant.createMany({
+          data: toCreate.map(({ v, colorSize, value, sku: variantSku }) => ({
+            productId: id,
+            value,
+            color: colorSize.color,
+            size: colorSize.size,
+            sku: variantSku as string,
+            currentStock: v.stock,
+            status: v.status,
+          })),
+        });
       }
     } else if (willArchiveAllVariants) {
       await tx.productVariant.updateMany({
