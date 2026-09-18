@@ -8,7 +8,10 @@ import { checkRateLimit, getClientIp } from "@/lib/api/rate-limit";
 import { productListQuerySchema } from "@/lib/validators/public/products";
 import { featuredFlagsProvider } from "@/lib/collections/featured-flags-provider";
 import { getPagination, getPageCount } from "@/lib/utils/pagination";
-import { PUBLIC_PRODUCT_SUMMARY_SELECT, toProductSummaryDTO } from "@/lib/api/public-product-select";
+import {
+  PUBLIC_PRODUCT_SUMMARY_SELECT,
+  toProductSummaryDTO,
+} from "@/lib/api/public-product-select";
 import type { Prisma } from "@prisma/client";
 
 const SORT_MAP: Record<string, Prisma.ProductOrderByWithRelationInput> = {
@@ -23,7 +26,10 @@ const SORT_MAP: Record<string, Prisma.ProductOrderByWithRelationInput> = {
  * Action calls revalidateTag('products') on commit (see lib/actions/
  * products.ts and inventory.ts), so this stays effectively real-time while
  * still giving repeated identical requests a cache hit in between writes.
- * `revalidate: 60` is a safety-net TTL, not the primary invalidation path.
+ *
+ * Cache key version bumped to v2 because the public summary response was
+ * expanded to include variant image data. This prevents previously cached
+ * list responses from continuing to serve the old DTO shape after deployment.
  */
 const getCachedProductList = unstable_cache(
   async (query: {
@@ -34,7 +40,10 @@ const getCachedProductList = unstable_cache(
     page: number;
     pageSize: number;
   }) => {
-    const { skip, take, page, pageSize } = getPagination(query.page, query.pageSize);
+    const { skip, take, page, pageSize } = getPagination(
+      query.page,
+      query.pageSize
+    );
 
     const where: Prisma.ProductWhereInput = {
       status: "ACTIVE",
@@ -48,9 +57,15 @@ const getCachedProductList = unstable_cache(
             ],
           }
         : {}),
-      ...(query.category ? { categories: { some: { slug: query.category } } } : {}),
+      ...(query.category
+        ? { categories: { some: { slug: query.category } } }
+        : {}),
       ...(query.featured
-        ? featuredFlagsProvider.whereClauseForFlag(query.featured as Parameters<typeof featuredFlagsProvider.whereClauseForFlag>[0])
+        ? featuredFlagsProvider.whereClauseForFlag(
+            query.featured as Parameters<
+              typeof featuredFlagsProvider.whereClauseForFlag
+            >[0]
+          )
         : {}),
     };
 
@@ -67,10 +82,15 @@ const getCachedProductList = unstable_cache(
 
     return {
       items: rows.map(toProductSummaryDTO),
-      meta: { page, pageSize, total, pageCount: getPageCount(total, pageSize) } satisfies PaginationMeta,
+      meta: {
+        page,
+        pageSize,
+        total,
+        pageCount: getPageCount(total, pageSize),
+      } satisfies PaginationMeta,
     };
   },
-  ["public-product-list"],
+  ["public-product-list-v2"],
   { tags: ["products"], revalidate: 60 }
 );
 
@@ -79,12 +99,23 @@ export async function GET(req: NextRequest) {
 
   try {
     const ip = getClientIp(req);
-    const rateLimit = checkRateLimit(`public:products:${ip}`, 120, 60_000);
+    const rateLimit = checkRateLimit(
+      `public:products:${ip}`,
+      120,
+      60_000
+    );
+
     if (!rateLimit.allowed) {
-      throw new ApiError("RATE_LIMITED", "Too many requests. Please try again shortly.");
+      throw new ApiError(
+        "RATE_LIMITED",
+        "Too many requests. Please try again shortly."
+      );
     }
 
-    const query = productListQuerySchema.parse(Object.fromEntries(req.nextUrl.searchParams));
+    const query = productListQuerySchema.parse(
+      Object.fromEntries(req.nextUrl.searchParams)
+    );
+
     const { items, meta } = await getCachedProductList(query);
 
     return withCors(ok(items, meta), origin);
