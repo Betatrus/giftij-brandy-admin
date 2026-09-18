@@ -23,7 +23,13 @@ export const PUBLIC_PRODUCT_SUMMARY_SELECT = {
     orderBy: { sortOrder: "asc" as const },
   },
   inventory: { select: { currentStock: true } },
-  variants: { select: { id: true, currentStock: true } },
+  variants: {
+    select: {
+      id: true,
+      currentStock: true,
+      image: { select: { url: true, altText: true } },
+    },
+  },
 } satisfies Prisma.ProductSelect;
 
 export const PUBLIC_PRODUCT_DETAIL_SELECT = {
@@ -46,7 +52,14 @@ export const PUBLIC_PRODUCT_DETAIL_SELECT = {
   variantType: true,
   categories: { select: { name: true, slug: true } },
   images: {
-    select: { url: true, altText: true, width: true, height: true, format: true, sortOrder: true },
+    select: {
+      url: true,
+      altText: true,
+      width: true,
+      height: true,
+      format: true,
+      sortOrder: true,
+    },
     orderBy: { sortOrder: "asc" as const },
   },
   specs: { select: { label: true, value: true } },
@@ -83,7 +96,11 @@ interface ProductSummaryRowShape {
   categories: { name: string; slug: string }[];
   images: { url: string; imageType: string }[];
   inventory: { currentStock: number } | null;
-  variants: { id: string; currentStock: number }[];
+  variants: {
+    id: string;
+    currentStock: number;
+    image: { url: string; altText: string | null } | null;
+  }[];
 }
 
 interface ProductDetailRowShape {
@@ -105,7 +122,14 @@ interface ProductDetailRowShape {
   seoDescription: string | null;
   variantType: string | null;
   categories: { name: string; slug: string }[];
-  images: { url: string; altText: string | null; width: number | null; height: number | null; format: string | null; sortOrder: number }[];
+  images: {
+    url: string;
+    altText: string | null;
+    width: number | null;
+    height: number | null;
+    format: string | null;
+    sortOrder: number;
+  }[];
   specs: { label: string; value: string }[];
   variants: {
     id: string;
@@ -139,14 +163,22 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
     // Precomputed via the SAME helper the Paystack webhook uses to set
-    // OrderItem.unitPrice (lib/pricing/effective-price.ts) — so what the
-    // storefront displays as the selling price and what actually gets
-    // charged can never drift apart. `price` above remains the
+    // OrderItem.unitPrice (lib/pricing/effective-price.ts) — so what
+    // the storefront displays as the selling price and what actually
+    // gets charged can never drift apart. `price` above remains the
     // "crossed-out" listed price for the storefront to show alongside it.
-    discountedPrice: computeEffectivePrice(toNumber(row.price), row.discount ? toNumber(row.discount) : 0),
+    discountedPrice: computeEffectivePrice(
+      toNumber(row.price),
+      row.discount ? toNumber(row.discount) : 0
+    ),
     currency: row.currency,
     coverImage: cover?.url ?? null,
     images: row.images.map((i) => i.url),
+    variants: row.variants.map((v) => ({
+      id: v.id,
+      currentStock: v.currentStock,
+      image: v.image?.url ?? null,
+    })),
     featuredFlags: row.featuredFlags,
     inStock: baseStock > 0 || variantStock > 0,
     hasVariants: row.variants.length > 0,
@@ -155,7 +187,10 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
 
 export function toProductDetailDTO(row: ProductDetailRowShape) {
   const baseStock = row.inventory?.currentStock ?? 0;
-  const variantStockTotal = row.variants.reduce((sum, v) => sum + v.currentStock, 0);
+  const variantStockTotal = row.variants.reduce(
+    (sum, v) => sum + v.currentStock,
+    0
+  );
 
   return {
     id: row.id,
@@ -167,7 +202,10 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     brand: row.brand,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
-    discountedPrice: computeEffectivePrice(toNumber(row.price), row.discount ? toNumber(row.discount) : 0),
+    discountedPrice: computeEffectivePrice(
+      toNumber(row.price),
+      row.discount ? toNumber(row.discount) : 0
+    ),
     currency: row.currency,
     weight: row.weight,
     dimensions: row.dimensions,
@@ -188,15 +226,16 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     // null when the product has no variants.
     variantType: row.variantType,
     variants: row.variants
-      .filter((v) => v.status !== "ARCHIVED") // sold-out variants stay visible; archived ones don't
+      .filter((v) => v.status !== "ARCHIVED")
+      // sold-out variants stay visible; archived ones don't
       .map((v) => ({
         // `id` is the authoritative transactional identity — the
         // storefront's Color -> Size -> variant resolution (and
         // checkStockAvailability/checkout) must use this, never
         // reconstruct it from `value`. `color`/`size` (Phase 9) let the
         // storefront group/filter without parsing `value` itself; both
-        // are null for Material/custom variants, where `value` alone is
-        // still the whole story.
+        // are null for Material/custom variants, where `value` alone
+        // is still the whole story.
         id: v.id,
         sku: v.sku,
         color: v.color,
