@@ -18,29 +18,39 @@ import {
   checkStockAvailability,
   type UnavailableStockLine,
 } from "@/lib/orders/stock";
+import {
+  acquireCheckoutSlot,
+} from "@/lib/orders/checkout-concurrency";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 
 /**
  * Starts a purchase.
  *
- * The storefront never talks directly to Paystack's API and never receives
- * PAYSTACK_SECRET_KEY.
+ * SECURITY / CONCURRENCY FLOW
  *
- * Flow:
- *
- * 1. Validate the checkout request.
- * 2. Resolve productSlug/SKU against the Giftij database.
- * 3. Check live stock for every requested cart line.
- * 4. If any requested quantity cannot be fulfilled:
+ * 1. Apply per-IP checkout rate limiting.
+ * 2. Validate the incoming checkout payload.
+ * 3. Pass the request through the adaptive checkout concurrency gate.
+ * 4. Resolve productSlug/SKU against the Giftij database.
+ * 5. Check live stock for every requested cart line.
+ * 6. If any requested quantity cannot be fulfilled:
  *    - stop checkout,
  *    - do not initialize Paystack,
  *    - return exact requested/available quantities,
  *    - include customer-care WhatsApp.
- * 5. Calculate the authoritative order value from database prices.
- * 6. Initialize Paystack.
- * 7. Paystack webhook creates the actual Order only after successful payment.
+ * 7. Calculate the authoritative order value from database prices.
+ * 8. Initialize Paystack.
+ * 9. Release the checkout-processing slot.
+ * 10. Paystack webhook creates the actual Order only after successful payment.
  *
- * This endpoint deliberately does NOT create an Order.
+ * IMPORTANT:
+ *
+ * This endpoint does NOT reserve or deduct stock.
+ *
+ * The Paystack webhook remains the final payment authority and performs the
+ * authoritative atomic inventory deduction after successful payment.
+ *
+ * The storefront never receives PAYSTACK_SECRET_KEY.
  */
 
 function formatStockIssue(
@@ -75,10 +85,26 @@ export async function POST(
   const origin =
     req.headers.get("origin");
 
+  let releaseCheckoutSlot:
+    | (() => void)
+    | null = null;
+
   try {
     const ip =
       getClientIp(req);
 
+    /*
+     * First line of defence against one client repeatedly hammering
+     * checkout initialization.
+     *
+     * This remains deliberately separate from the concurrency gate:
+     *
+     * rate limiting
+     * -> controls request frequency per client
+     *
+     * concurrency gate
+     * -> smooths simultaneous checkout processing per server instance
+     */
     const rateLimit =
       checkRateLimit(
         `public:checkout-init:${ip}`,
@@ -93,10 +119,34 @@ export async function POST(
       );
     }
 
+    /*
+     * Reject malformed input BEFORE consuming one of the protected
+     * checkout-processing slots.
+     */
     const body =
       checkoutInitializeSchema.parse(
         await req.json(),
       );
+
+    /*
+     * Adaptive application-level concurrency gate.
+     *
+     * Low traffic passes immediately.
+     *
+     * Small bursts receive a tiny smoothing delay.
+     *
+     * Larger bursts queue locally instead of allowing every request to hit
+     * PostgreSQL and Paystack simultaneously from the same function instance.
+     */
+    releaseCheckoutSlot =
+      await acquireCheckoutSlot();
+
+    if (!releaseCheckoutSlot) {
+      throw new ApiError(
+        "RATE_LIMITED",
+        "Checkout is receiving unusually high traffic. Please try again in a moment.",
+      );
+    }
 
     /**
      * Never trust price, product ID or variant ID supplied by the browser.
@@ -110,6 +160,11 @@ export async function POST(
 
     /**
      * Live inventory check immediately before Paystack initialization.
+     *
+     * This is intentionally NOT a reservation.
+     *
+     * PostgreSQL + the Paystack webhook remain authoritative if several
+     * customers reach payment around the same time.
      */
     const unavailable =
       await checkStockAvailability(
@@ -130,6 +185,7 @@ export async function POST(
         {
           unavailableItems:
             unavailable,
+
           customerCareWhatsApp,
         },
       );
@@ -171,10 +227,16 @@ export async function POST(
 
     const storefrontUrl =
       process.env.STOREFRONT_URL ??
-      "https://www.giftij.com";
+      "https://www.giftijbrandy.com";
 
     /**
-     * Paystack is contacted only after stock has passed.
+     * Paystack is contacted only after:
+     *
+     * - request validation
+     * - rate limiting
+     * - concurrency gating
+     * - cart resolution
+     * - live inventory validation
      */
     const paystackRes =
       await fetch(
@@ -185,47 +247,47 @@ export async function POST(
           headers: {
             Authorization:
               `Bearer ${secretKey}`,
+
             "Content-Type":
               "application/json",
           },
 
-          body: JSON.stringify(
-            {
-              email:
-                body.email,
+          body: JSON.stringify({
+            email:
+              body.email,
 
-              amount:
-                amountKobo,
+            amount:
+              amountKobo,
 
-              currency:
-                "NGN",
+            currency:
+              "NGN",
 
-              callback_url:
-                `${storefrontUrl}/checkout/callback`,
+            callback_url:
+              `${storefrontUrl}/checkout/callback`,
 
-              /**
-               * Keep the metadata contract expected by the webhook.
-               */
-              metadata: {
-                cart:
-                  resolved.map(
-                    (line) => ({
-                      productId:
-                        line.productId,
+            /**
+             * Keep the metadata contract expected by the existing
+             * Paystack webhook.
+             */
+            metadata: {
+              cart:
+                resolved.map(
+                  (line) => ({
+                    productId:
+                      line.productId,
 
-                      variantId:
-                        line.variantId,
+                    variantId:
+                      line.variantId,
 
-                      quantity:
-                        line.quantity,
-                    }),
-                  ),
+                    quantity:
+                      line.quantity,
+                  }),
+                ),
 
-                shippingAddress:
-                  body.shippingAddress,
-              },
+              shippingAddress:
+                body.shippingAddress,
             },
-          ),
+          }),
         },
       );
 
@@ -235,12 +297,18 @@ export async function POST(
         .catch(() => null)) as
         | {
             status?: boolean;
+
             message?: string;
 
             data?: {
-              authorization_url: string;
-              access_code: string;
-              reference: string;
+              authorization_url:
+                string;
+
+              access_code:
+                string;
+
+              reference:
+                string;
             };
           }
         | null;
@@ -284,6 +352,14 @@ export async function POST(
       fail(error),
       origin,
     );
+  } finally {
+    /*
+     * Absolutely critical:
+     *
+     * success, validation failure, stock failure, Paystack failure, or
+     * unexpected exception must all release the concurrency slot.
+     */
+    releaseCheckoutSlot?.();
   }
 }
 
