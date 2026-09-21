@@ -15,9 +15,29 @@ type OrderNotification = {
   id: string;
   orderNumber: string;
   createdAt: string | Date;
+
   customer: {
     name: string;
   };
+};
+
+type OrderReminder = {
+  id: string;
+  orderNumber: string;
+
+  customer: {
+    name: string;
+  };
+
+  status:
+    | "PENDING"
+    | "PROCESSING";
+
+  reminderSince:
+    | string
+    | Date;
+
+  daysOpen: number;
 };
 
 type InventoryNotification = {
@@ -72,6 +92,19 @@ function stockMovement(
   return `${item.beforeStock} → ${item.afterStock}`;
 }
 
+function reminderTitle(
+  reminder: OrderReminder,
+) {
+  if (
+    reminder.status ===
+    "PENDING"
+  ) {
+    return "Pending order needs attention";
+  }
+
+  return "Processing order needs follow-up";
+}
+
 export function NotificationBell() {
   const [open, setOpen] =
     useState(false);
@@ -80,12 +113,23 @@ export function NotificationBell() {
     useState(0);
 
   const [orders, setOrders] =
-    useState<OrderNotification[]>([]);
-
-  const [inventory, setInventory] =
     useState<
-      InventoryNotification[]
+      OrderNotification[]
     >([]);
+
+  const [
+    orderReminders,
+    setOrderReminders,
+  ] = useState<
+    OrderReminder[]
+  >([]);
+
+  const [
+    inventory,
+    setInventory,
+  ] = useState<
+    InventoryNotification[]
+  >([]);
 
   const containerRef =
     useRef<HTMLDivElement>(
@@ -103,12 +147,16 @@ export function NotificationBell() {
         res.orders as unknown as OrderNotification[],
       );
 
+      setOrderReminders(
+        res.orderReminders as unknown as OrderReminder[],
+      );
+
       setInventory(
         res.inventory as unknown as InventoryNotification[],
       );
     } catch {
-      // Notification failure should
-      // never block the admin UI.
+      // Notifications must never
+      // block normal admin usage.
     }
   }
 
@@ -153,6 +201,7 @@ export function NotificationBell() {
 
   const isEmpty =
     orders.length === 0 &&
+    orderReminders.length === 0 &&
     inventory.length === 0;
 
   return (
@@ -164,7 +213,8 @@ export function NotificationBell() {
         type="button"
         onClick={() => {
           setOpen(
-            (current) => !current,
+            (current) =>
+              !current,
           );
 
           if (!open) {
@@ -186,14 +236,14 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-[340px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-soft border border-cream z-50 overflow-hidden">
+        <div className="absolute right-0 mt-2 w-[360px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-soft border border-cream z-50 overflow-hidden">
           <div className="px-4 py-3 border-b border-cream">
             <p className="font-body text-sm font-medium text-ink">
               Notifications
             </p>
 
             <p className="font-body text-[11px] text-ink/40 mt-0.5">
-              New orders and recent inventory activity
+              Orders, reminders and recent inventory activity
             </p>
           </div>
 
@@ -203,19 +253,84 @@ export function NotificationBell() {
             </p>
           ) : (
             <div className="max-h-96 overflow-y-auto">
-              {orders.length > 0 && (
+              {orderReminders.length >
+                0 && (
+                <div>
+                  <p className="px-4 pt-3 pb-1 font-body text-[10px] uppercase tracking-wider text-red-600">
+                    Needs Attention
+                  </p>
+
+                  {orderReminders.map(
+                    (reminder) => (
+                      <Link
+                        key={
+                          reminder.id
+                        }
+                        href={`/admin/orders/${reminder.id}`}
+                        onClick={() =>
+                          setOpen(
+                            false,
+                          )
+                        }
+                        className="block px-4 py-3 border-b border-cream bg-red-50/40 hover:bg-red-50"
+                      >
+                        <p className="font-body text-sm font-medium text-ink">
+                          {reminderTitle(
+                            reminder,
+                          )}
+                        </p>
+
+                        <p className="font-body text-xs text-ink/60 mt-0.5">
+                          {
+                            reminder.orderNumber
+                          }{" "}
+                          ·{" "}
+                          {
+                            reminder
+                              .customer
+                              .name
+                          }
+                        </p>
+
+                        <p className="font-body text-[11px] text-red-600 mt-1">
+                          {reminder.status ===
+                          "PENDING"
+                            ? "Pending"
+                            : "Processing"}{" "}
+                          for{" "}
+                          {
+                            reminder.daysOpen
+                          }{" "}
+                          day
+                          {reminder.daysOpen ===
+                          1
+                            ? ""
+                            : "s"}
+                        </p>
+                      </Link>
+                    ),
+                  )}
+                </div>
+              )}
+
+              {orders.length >
+                0 && (
                 <div>
                   <p className="px-4 pt-3 pb-1 font-body text-[10px] uppercase tracking-wider text-ink/40">
-                    Orders
+                    New Orders
                   </p>
 
                   {orders.map(
                     (order) => (
                       <Link
-                        key={order.id}
+                        key={
+                          order.id
+                        }
                         href={`/admin/orders/${order.id}`}
                         onClick={() =>
-                          setOpen(false)
+                          setOpen(
+                            false,
+                          )
                         }
                         className="block px-4 py-3 border-b border-cream hover:bg-cream/40"
                       >
@@ -224,8 +339,15 @@ export function NotificationBell() {
                         </p>
 
                         <p className="font-body text-xs text-ink/50 mt-0.5">
-                          {order.orderNumber} ·{" "}
-                          {order.customer.name}
+                          {
+                            order.orderNumber
+                          }{" "}
+                          ·{" "}
+                          {
+                            order
+                              .customer
+                              .name
+                          }
                         </p>
                       </Link>
                     ),
@@ -233,7 +355,8 @@ export function NotificationBell() {
                 </div>
               )}
 
-              {inventory.length > 0 && (
+              {inventory.length >
+                0 && (
                 <div>
                   <p className="px-4 pt-3 pb-1 font-body text-[10px] uppercase tracking-wider text-ink/40">
                     Inventory
@@ -255,7 +378,9 @@ export function NotificationBell() {
                           </p>
 
                           <p className="font-body text-xs text-ink/60 mt-0.5">
-                            {item.productName}
+                            {
+                              item.productName
+                            }
 
                             {item.variantLabel
                               ? ` · ${item.variantLabel}`
@@ -265,13 +390,17 @@ export function NotificationBell() {
                           {movement && (
                             <p className="font-body text-xs text-ink/50 mt-0.5">
                               Stock:{" "}
-                              {movement}
+                              {
+                                movement
+                              }
                             </p>
                           )}
 
                           <p className="font-body text-[11px] text-ink/40 mt-1">
                             By{" "}
-                            {item.actorName}
+                            {
+                              item.actorName
+                            }
 
                             {item.businessDate
                               ? ` · ${item.businessDate}`
@@ -285,21 +414,29 @@ export function NotificationBell() {
                       ) {
                         return (
                           <Link
-                            key={item.id}
+                            key={
+                              item.id
+                            }
                             href={`/admin/inventory#product-${item.productId}`}
                             onClick={() =>
-                              setOpen(false)
+                              setOpen(
+                                false,
+                              )
                             }
                             className="block px-4 py-3 border-b border-cream hover:bg-cream/40"
                           >
-                            {content}
+                            {
+                              content
+                            }
                           </Link>
                         );
                       }
 
                       return (
                         <div
-                          key={item.id}
+                          key={
+                            item.id
+                          }
                           className="px-4 py-3 border-b border-cream"
                         >
                           {content}
