@@ -1,17 +1,32 @@
 /**
- * Allowed origins for /api/v1/public/*. Configurable via env so preview
- * deployments and local dev can add their own storefront URL without a
- * code change. Defaults cover production.
+ * Allowed origins for /api/v1/public/*.
+ *
+ * Production storefront origins are always allowed.
+ * Additional origins, such as localhost or preview deployments,
+ * can be added through PUBLIC_API_ALLOWED_ORIGINS.
  */
 function getAllowedOrigins(): string[] {
-  const fromEnv = process.env.PUBLIC_API_ALLOWED_ORIGINS;
-  if (fromEnv) return fromEnv.split(",").map((s) => s.trim()).filter(Boolean);
-  return ["https://www.giftij.com", "https://giftij.com"];
+  const defaults = [
+    "https://giftij-brandy-frontend.vercel.app",
+    "https://www.giftijbrandy.com",
+    "https://giftijbrandy.com",
+  ];
+
+  const fromEnv = process.env.PUBLIC_API_ALLOWED_ORIGINS
+    ?.split(",")
+    .map((s) => s.trim())
+    .filter(Boolean) ?? [];
+
+  return [...new Set([...defaults, ...fromEnv])];
 }
 
 export function corsHeaders(requestOrigin: string | null): HeadersInit {
   const allowed = getAllowedOrigins();
-  const origin = requestOrigin && allowed.includes(requestOrigin) ? requestOrigin : allowed[0];
+
+  const origin =
+    requestOrigin && allowed.includes(requestOrigin)
+      ? requestOrigin
+      : allowed[0];
 
   return {
     "Access-Control-Allow-Origin": origin,
@@ -23,15 +38,23 @@ export function corsHeaders(requestOrigin: string | null): HeadersInit {
 }
 
 /** Mutates and returns the response with CORS headers applied. */
-export function withCors(response: Response, requestOrigin: string | null): Response {
+export function withCors(
+  response: Response,
+  requestOrigin: string | null
+): Response {
   const headers = corsHeaders(requestOrigin);
+
   for (const [key, value] of Object.entries(headers)) {
     response.headers.set(key, value as string);
   }
+
   return response;
 }
 
 /** Standard preflight (OPTIONS) response for a public API route. */
 export function corsPreflight(requestOrigin: string | null): Response {
-  return new Response(null, { status: 204, headers: corsHeaders(requestOrigin) });
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders(requestOrigin),
+  });
 }
