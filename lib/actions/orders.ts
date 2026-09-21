@@ -2,61 +2,126 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { hasPermission, stripFinancialFields, stripFinancialFieldsFromList } from "@/lib/permissions";
+import {
+  hasPermission,
+  stripFinancialFields,
+  stripFinancialFieldsFromList,
+} from "@/lib/permissions";
 import { logActivity } from "@/lib/activity-log";
-import { getPagination, getPageCount, DEFAULT_PAGE_SIZE } from "@/lib/utils/pagination";
+import {
+  getPagination,
+  getPageCount,
+  DEFAULT_PAGE_SIZE,
+} from "@/lib/utils/pagination";
 import {
   toSchemaOrderStatus,
   fromSchemaOrderStatus,
   assertValidOrderTransition,
   type AdminOrderStatus,
 } from "@/lib/utils/order-status";
-import { orderFiltersSchema, addOrderNoteSchema, type OrderFiltersInput } from "@/lib/validators/order";import { revalidatePath, revalidateTag } from "next/cache";
+import {
+  orderFiltersSchema,
+  addOrderNoteSchema,
+  type OrderFiltersInput,
+} from "@/lib/validators/order";
+import { revalidatePath, revalidateTag } from "next/cache";
 import type { Prisma } from "@prisma/client";
 
 async function requireSession() {
   const session = await auth();
-  if (!session?.user) throw new Error("UNAUTHENTICATED");
+
+  if (!session?.user) {
+    throw new Error("UNAUTHENTICATED");
+  }
+
   return session;
 }
 
 /**
- * Orders from Bags/Shoes/Slippers together, one list, default ALL — per
- * the master prompt (§28 / correction §12), never split per-category.
- * "Online/offline" is deliberately not a filter here: every row in this
- * table IS an online (Paystack) order — offline, in-store sales never
- * create an Order at all, they're recorded as Inventory adjustments (see
- * lib/actions/inventory.ts's Offline Sale classification). Reports/
- * Analytics are where online vs offline gets compared side by side.
+ * Orders from all active product categories are shown together.
  */
 export async function listOrders(params: OrderFiltersInput) {
   const session = await requireSession();
+
   if (!hasPermission(session.user.role, "orders:read")) {
-    throw new Error("FORBIDDEN: you do not have permission to view orders");
+    throw new Error(
+      "FORBIDDEN: you do not have permission to view orders"
+    );
   }
 
   const parsed = orderFiltersSchema.parse(params);
-  const { skip, take, page, pageSize } = getPagination(parsed.page, parsed.pageSize ?? DEFAULT_PAGE_SIZE);
+
+  const { skip, take, page, pageSize } = getPagination(
+    parsed.page,
+    parsed.pageSize ?? DEFAULT_PAGE_SIZE
+  );
 
   const where: Prisma.OrderWhereInput = {
-    ...(parsed.status ? { status: toSchemaOrderStatus(parsed.status) } : {}),
-    ...(parsed.categoryId
-      ? { items: { some: { product: { categories: { some: { id: parsed.categoryId } } } } } }
-      : {}),
-    ...(parsed.dateFrom || parsed.dateTo
+    ...(parsed.status
       ? {
-          createdAt: {
-            ...(parsed.dateFrom ? { gte: new Date(parsed.dateFrom) } : {}),
-            ...(parsed.dateTo ? { lte: new Date(parsed.dateTo) } : {}),
+          status: toSchemaOrderStatus(parsed.status),
+        }
+      : {}),
+
+    ...(parsed.categoryId
+      ? {
+          items: {
+            some: {
+              product: {
+                categories: {
+                  some: {
+                    id: parsed.categoryId,
+                  },
+                },
+              },
+            },
           },
         }
       : {}),
+
+    ...(parsed.dateFrom || parsed.dateTo
+      ? {
+          createdAt: {
+            ...(parsed.dateFrom
+              ? {
+                  gte: new Date(parsed.dateFrom),
+                }
+              : {}),
+
+            ...(parsed.dateTo
+              ? {
+                  lte: new Date(parsed.dateTo),
+                }
+              : {}),
+          },
+        }
+      : {}),
+
     ...(parsed.search
       ? {
           OR: [
-            { orderNumber: { contains: parsed.search, mode: "insensitive" } },
-            { customer: { name: { contains: parsed.search, mode: "insensitive" } } },
-            { customer: { email: { contains: parsed.search, mode: "insensitive" } } },
+            {
+              orderNumber: {
+                contains: parsed.search,
+                mode: "insensitive",
+              },
+            },
+            {
+              customer: {
+                name: {
+                  contains: parsed.search,
+                  mode: "insensitive",
+                },
+              },
+            },
+            {
+              customer: {
+                email: {
+                  contains: parsed.search,
+                  mode: "insensitive",
+                },
+              },
+            },
           ],
         }
       : {}),
@@ -67,200 +132,543 @@ export async function listOrders(params: OrderFiltersInput) {
       where,
       skip,
       take,
-      orderBy: { createdAt: "desc" },
+      orderBy: {
+        createdAt: "desc",
+      },
+
       include: {
-        customer: { select: { id: true, name: true, email: true } },
-        items: { select: { quantity: true, product: { select: { categories: { select: { name: true, slug: true } } } } } },
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+
+        items: {
+          select: {
+            quantity: true,
+
+            product: {
+              select: {
+                categories: {
+                  select: {
+                    name: true,
+                    slug: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     }),
-    prisma.order.count({ where }),
+
+    prisma.order.count({
+      where,
+    }),
   ]);
 
-  const rows = orders.map((o) => ({
-    id: o.id,
-    orderNumber: o.orderNumber,
-    customer: o.customer,
-    status: fromSchemaOrderStatus(o.status),
-    subtotal: Number(o.subtotal),
-    profit: o.profit !== null ? Number(o.profit) : null,
-    itemCount: o.items.reduce((sum, i) => sum + i.quantity, 0),
-    categories: Array.from(new Set(o.items.flatMap((i) => i.product.categories.map((c) => c.name)))),
-    createdAt: o.createdAt,
+  const rows = orders.map((order) => ({
+    id: order.id,
+    orderNumber: order.orderNumber,
+    customer: order.customer,
+    status: fromSchemaOrderStatus(order.status),
+    subtotal: Number(order.subtotal),
+    profit:
+      order.profit !== null
+        ? Number(order.profit)
+        : null,
+
+    itemCount: order.items.reduce(
+      (sum, item) => sum + item.quantity,
+      0
+    ),
+
+    categories: Array.from(
+      new Set(
+        order.items.flatMap((item) =>
+          item.product.categories.map(
+            (category) => category.name
+          )
+        )
+      )
+    ),
+
+    createdAt: order.createdAt,
   }));
 
-  const safeRows = stripFinancialFieldsFromList(rows as unknown as Record<string, unknown>[], session.user.role);
+  const safeRows =
+    stripFinancialFieldsFromList(
+      rows as unknown as Record<string, unknown>[],
+      session.user.role
+    );
 
-  return { items: safeRows, total, page, pageSize, pageCount: getPageCount(total, pageSize) };
+  return {
+    items: safeRows,
+    total,
+    page,
+    pageSize,
+    pageCount: getPageCount(total, pageSize),
+  };
 }
 
 /**
- * Viewing an order transitions it PENDING -> PROCESSING automatically —
- * per the master prompt's corrected business rule, there is deliberately
- * no separate "Start Processing" action. This only fires once (PENDING
- * -> PROCESSING is a one-way, one-time move); viewing an already-
- * PROCESSING/COMPLETED/CANCELLED order just displays it.
+ * READ ONLY.
+ *
+ * Loading an order must not mutate database state during Server Component
+ * rendering.
+ *
+ * The PENDING -> PROCESSING transition is handled separately by
+ * markOrderProcessingOnView().
  */
 export async function getOrder(id: string) {
   const session = await requireSession();
+
   if (!hasPermission(session.user.role, "orders:read")) {
-    throw new Error("FORBIDDEN: you do not have permission to view orders");
+    throw new Error(
+      "FORBIDDEN: you do not have permission to view orders"
+    );
   }
 
-  let order = await prisma.order.findUniqueOrThrow({
-    where: { id },
-    include: {
-      customer: true,
-      items: { include: { product: { select: { id: true, name: true, images: { take: 1, orderBy: { sortOrder: "asc" } } } }, variant: { select: { id: true, value: true } } } },
-      notes: { orderBy: { createdAt: "desc" } },
-      timeline: { orderBy: { createdAt: "asc" } },
-    },
-  });
+  const order =
+    await prisma.order.findUniqueOrThrow({
+      where: {
+        id,
+      },
 
-  if (order.status === "PENDING") {
-    await prisma.$transaction([
-      prisma.order.update({ where: { id }, data: { status: "PROCESSING" } }),
-      prisma.orderEvent.create({ data: { orderId: id, label: "Order Viewed — now Processing" } }),
-    ]);
+      include: {
+        /**
+         * Select only what the OrderDetail client component actually needs.
+         *
+         * Do not return the entire Customer Prisma object because fields
+         * such as Decimal-backed financial/customer values are not needed
+         * here and should not cross the Server -> Client boundary.
+         */
+        customer: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+          },
+        },
 
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+
+                images: {
+                  take: 1,
+                  orderBy: {
+                    sortOrder: "asc",
+                  },
+                },
+              },
+            },
+
+            variant: {
+              select: {
+                id: true,
+                value: true,
+              },
+            },
+          },
+        },
+
+        notes: {
+          orderBy: {
+            createdAt: "desc",
+          },
+        },
+
+        timeline: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+
+  const safe = stripFinancialFields(
+    order as unknown as Record<string, unknown>,
+    session.user.role
+  );
+
+  return {
+    ...safe,
+    adminStatus: fromSchemaOrderStatus(order.status),
+  } as typeof safe & {
+    adminStatus: AdminOrderStatus;
+  };
+}
+
+/**
+ * Opening/viewing a PENDING order is the operational signal that an admin
+ * has begun processing it.
+ *
+ * This action is intentionally separate from getOrder() so we never mutate
+ * application state during Server Component rendering.
+ *
+ * updateMany() makes the transition idempotent. If two renders/tabs try to
+ * mark the same order simultaneously, only the first PENDING row changes.
+ */
+export async function markOrderProcessingOnView(
+  id: string
+) {
+  const session = await requireSession();
+
+  if (!hasPermission(session.user.role, "orders:read")) {
+    throw new Error(
+      "FORBIDDEN: you do not have permission to view orders"
+    );
+  }
+
+  const changed =
+    await prisma.$transaction(async (tx) => {
+      const result =
+        await tx.order.updateMany({
+          where: {
+            id,
+            status: "PENDING",
+          },
+
+          data: {
+            status: "PROCESSING",
+          },
+        });
+
+      if (result.count === 0) {
+        return false;
+      }
+
+      await tx.orderEvent.create({
+        data: {
+          orderId: id,
+          label:
+            "Order Viewed - now Processing",
+        },
+      });
+
+      return true;
+    });
+
+  if (changed) {
     await logActivity({
       userId: session.user.id,
       action: "ORDER_STATUS_UPDATE",
       resource: `Order:${id}`,
-      metadata: { from: "PENDING", to: "PROCESSING", trigger: "viewed" },
+      metadata: {
+        from: "PENDING",
+        to: "PROCESSING",
+        trigger: "viewed",
+      },
     });
 
     revalidatePath("/admin/orders");
+    revalidatePath(
+      `/admin/orders/${id}`
+    );
     revalidateTag("orders");
-
-    order = await prisma.order.findUniqueOrThrow({
-      where: { id },
-      include: {
-        customer: true,
-        items: { include: { product: { select: { id: true, name: true, images: { take: 1, orderBy: { sortOrder: "asc" } } } }, variant: { select: { id: true, value: true } } } },
-        notes: { orderBy: { createdAt: "desc" } },
-        timeline: { orderBy: { createdAt: "asc" } },
-      },
-    });
   }
 
-  const safe = stripFinancialFields(order as unknown as Record<string, unknown>, session.user.role);
-  return { ...safe, adminStatus: fromSchemaOrderStatus(order.status) } as typeof safe & { adminStatus: AdminOrderStatus };
+  return {
+    changed,
+  };
 }
 
-/** The admin's "Complete Order" button — PROCESSING -> COMPLETED (schema DELIVERED). */
-export async function completeOrder(id: string) {
+/**
+ * PROCESSING -> COMPLETED.
+ */
+export async function completeOrder(
+  id: string
+) {
   const session = await requireSession();
+
   if (!hasPermission(session.user.role, "orders:write")) {
-    throw new Error("FORBIDDEN: you do not have permission to update orders");
+    throw new Error(
+      "FORBIDDEN: you do not have permission to update orders"
+    );
   }
 
-  const existing = await prisma.order.findUniqueOrThrow({ where: { id } });
-  const from = fromSchemaOrderStatus(existing.status);
-  assertValidOrderTransition(from, "COMPLETED");
+  const existing =
+    await prisma.order.findUniqueOrThrow({
+      where: {
+        id,
+      },
+    });
+
+  const from =
+    fromSchemaOrderStatus(
+      existing.status
+    );
+
+  assertValidOrderTransition(
+    from,
+    "COMPLETED"
+  );
 
   await prisma.$transaction([
-    prisma.order.update({ where: { id }, data: { status: "DELIVERED" } }),
-    prisma.orderEvent.create({ data: { orderId: id, label: "Order Completed" } }),
+    prisma.order.update({
+      where: {
+        id,
+      },
+
+      data: {
+        status: "DELIVERED",
+      },
+    }),
+
+    prisma.orderEvent.create({
+      data: {
+        orderId: id,
+        label: "Order Completed",
+      },
+    }),
   ]);
 
   await logActivity({
     userId: session.user.id,
     action: "ORDER_STATUS_UPDATE",
     resource: `Order:${id}`,
-    metadata: { from, to: "COMPLETED" },
+    metadata: {
+      from,
+      to: "COMPLETED",
+    },
   });
 
   revalidatePath("/admin/orders");
-  revalidatePath(`/admin/orders/${id}`);
+  revalidatePath(
+    `/admin/orders/${id}`
+  );
   revalidateTag("orders");
 }
 
 /**
- * Cancels an order and restocks its items — a cancelled order should not
- * leave inventory permanently short for stock that was reserved but will
- * now never ship. Restock is logged as a RETURN-type entry (closest
- * existing StockChangeType semantically: stock coming back in without a
- * sale) on both the base Inventory and per-variant audit trails, same as
- * every other stock mutation in this codebase.
+ * Cancels an order and restores its inventory.
  */
-export async function cancelOrder(id: string) {
+export async function cancelOrder(
+  id: string
+) {
   const session = await requireSession();
+
   if (!hasPermission(session.user.role, "orders:write")) {
-    throw new Error("FORBIDDEN: you do not have permission to update orders");
+    throw new Error(
+      "FORBIDDEN: you do not have permission to update orders"
+    );
   }
 
-  const existing = await prisma.order.findUniqueOrThrow({
-    where: { id },
-    include: { items: true },
-  });
-  const from = fromSchemaOrderStatus(existing.status);
-  assertValidOrderTransition(from, "CANCELLED");
+  const existing =
+    await prisma.order.findUniqueOrThrow({
+      where: {
+        id,
+      },
 
-  await prisma.$transaction(async (tx) => {
-    for (const item of existing.items) {
-      if (item.variantId) {
-        const variant = await tx.productVariant.findUniqueOrThrow({ where: { id: item.variantId } });
-        await tx.productVariant.update({
-          where: { id: item.variantId },
-          data: {
-            currentStock: variant.currentStock + item.quantity,
-            soldStock: Math.max(0, variant.soldStock - item.quantity),
-            returnedStock: variant.returnedStock + item.quantity,
-          },
-        });
-        await tx.variantInventoryLog.create({
-          data: { variantId: item.variantId, changeType: "RETURN", quantity: item.quantity, reason: "[ORDER_CANCELLED] Restocked on cancellation" },
-        });
-      } else {
-        const inventory = await tx.inventory.findUniqueOrThrow({ where: { productId: item.productId } });
-        await tx.inventory.update({
-          where: { productId: item.productId },
-          data: {
-            currentStock: inventory.currentStock + item.quantity,
-            soldStock: Math.max(0, inventory.soldStock - item.quantity),
-            returnedStock: inventory.returnedStock + item.quantity,
-          },
-        });
-        await tx.inventoryLog.create({
-          data: { inventoryId: inventory.id, changeType: "RETURN", quantity: item.quantity, reason: "[ORDER_CANCELLED] Restocked on cancellation" },
-        });
+      include: {
+        items: true,
+      },
+    });
+
+  const from =
+    fromSchemaOrderStatus(
+      existing.status
+    );
+
+  assertValidOrderTransition(
+    from,
+    "CANCELLED"
+  );
+
+  await prisma.$transaction(
+    async (tx) => {
+      for (const item of existing.items) {
+        if (item.variantId) {
+          const variant =
+            await tx.productVariant.findUniqueOrThrow(
+              {
+                where: {
+                  id: item.variantId,
+                },
+              }
+            );
+
+          await tx.productVariant.update({
+            where: {
+              id: item.variantId,
+            },
+
+            data: {
+              currentStock:
+                variant.currentStock +
+                item.quantity,
+
+              soldStock: Math.max(
+                0,
+                variant.soldStock -
+                  item.quantity
+              ),
+
+              returnedStock:
+                variant.returnedStock +
+                item.quantity,
+            },
+          });
+
+          await tx.variantInventoryLog.create({
+            data: {
+              variantId:
+                item.variantId,
+
+              changeType:
+                "RETURN",
+
+              quantity:
+                item.quantity,
+
+              reason:
+                "[ORDER_CANCELLED] Restocked on cancellation",
+            },
+          });
+        } else {
+          const inventory =
+            await tx.inventory.findUniqueOrThrow(
+              {
+                where: {
+                  productId:
+                    item.productId,
+                },
+              }
+            );
+
+          await tx.inventory.update({
+            where: {
+              productId:
+                item.productId,
+            },
+
+            data: {
+              currentStock:
+                inventory.currentStock +
+                item.quantity,
+
+              soldStock: Math.max(
+                0,
+                inventory.soldStock -
+                  item.quantity
+              ),
+
+              returnedStock:
+                inventory.returnedStock +
+                item.quantity,
+            },
+          });
+
+          await tx.inventoryLog.create({
+            data: {
+              inventoryId:
+                inventory.id,
+
+              changeType:
+                "RETURN",
+
+              quantity:
+                item.quantity,
+
+              reason:
+                "[ORDER_CANCELLED] Restocked on cancellation",
+            },
+          });
+        }
       }
-    }
 
-    await tx.order.update({ where: { id }, data: { status: "CANCELLED" } });
-    await tx.orderEvent.create({ data: { orderId: id, label: "Order Cancelled" } });
-  });
+      await tx.order.update({
+        where: {
+          id,
+        },
+
+        data: {
+          status: "CANCELLED",
+        },
+      });
+
+      await tx.orderEvent.create({
+        data: {
+          orderId: id,
+          label: "Order Cancelled",
+        },
+      });
+    }
+  );
 
   await logActivity({
     userId: session.user.id,
     action: "ORDER_STATUS_UPDATE",
     resource: `Order:${id}`,
-    metadata: { from, to: "CANCELLED", restocked: true },
+    metadata: {
+      from,
+      to: "CANCELLED",
+      restocked: true,
+    },
   });
 
   revalidatePath("/admin/orders");
-  revalidatePath(`/admin/orders/${id}`);
-  revalidatePath("/admin/inventory");
+
+  revalidatePath(
+    `/admin/orders/${id}`
+  );
+
+  revalidatePath(
+    "/admin/inventory"
+  );
+
   revalidateTag("orders");
   revalidateTag("products");
 }
 
-export async function addOrderNote(input: { orderId: string; note: string }) {
-  const session = await requireSession();
+export async function addOrderNote(input: {
+  orderId: string;
+  note: string;
+}) {
+  const session =
+    await requireSession();
+
   if (!hasPermission(session.user.role, "orders:write")) {
-    throw new Error("FORBIDDEN: you do not have permission to update orders");
+    throw new Error(
+      "FORBIDDEN: you do not have permission to update orders"
+    );
   }
-  const parsed = addOrderNoteSchema.parse(input);
+
+  const parsed =
+    addOrderNoteSchema.parse(
+      input
+    );
 
   await prisma.orderNote.create({
-    data: { orderId: parsed.orderId, note: parsed.note, createdBy: session.user.id },
+    data: {
+      orderId:
+        parsed.orderId,
+
+      note:
+        parsed.note,
+
+      createdBy:
+        session.user.id,
+    },
   });
 
   await logActivity({
     userId: session.user.id,
-    action: "ORDER_NOTE_ADDED",
-    resource: `Order:${parsed.orderId}`,
+    action:
+      "ORDER_NOTE_ADDED",
+
+    resource:
+      `Order:${parsed.orderId}`,
   });
 
-  revalidatePath(`/admin/orders/${parsed.orderId}`);
+  revalidatePath(
+    `/admin/orders/${parsed.orderId}`
+  );
 }
