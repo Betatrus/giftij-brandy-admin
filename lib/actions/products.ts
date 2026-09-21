@@ -1,4 +1,4 @@
-"use server";
+﻿"use server";
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
@@ -19,12 +19,30 @@ async function requireSession() {
   return session;
 }
 
+/**
+ * Prisma Decimal values are class instances, not plain serializable values.
+ * Product data crosses the Server Component -> Client Component boundary in
+ * the admin UI, so convert product-level Decimal fields to normal numbers
+ * before returning them.
+ */
+function serializeProductForClient<T extends Record<string, unknown>>(record: T): T {
+  const plain = { ...record } as Record<string, unknown>;
+
+  for (const field of ["price", "costPrice", "discount"] as const) {
+    if (field in plain && plain[field] != null) {
+      plain[field] = Number(plain[field]);
+    }
+  }
+
+  return plain as T;
+}
+
 async function slugExists(candidate: string, excludeId?: string) {
   const existing = await prisma.product.findUnique({ where: { slug: candidate } });
   return !!existing && existing.id !== excludeId;
 }
 
-// The admin never types a SKU (see lib/validators/product.ts) — this
+// The admin never types a SKU (see lib/validators/product.ts) Ã¢â‚¬â€ this
 // derives a readable one from the product's slug, e.g. slug
 // "classic-black-tote" -> base "GB-CLASSIC-BLACK-TOTE", then
 // generateUniqueSku appends -2/-3/... on collision.
@@ -48,7 +66,7 @@ async function autoVariantSku(productSku: string, value: string) {
 }
 
 // ------------------------------------------------------------------
-// PHASE 9 — Color x Size structured fields
+// PHASE 9 Ã¢â‚¬â€ Color x Size structured fields
 //
 // `color`/`size` are the authoritative structured data going forward;
 // `value` becomes a SERVER-DERIVED display/back-compat string for the two
@@ -57,14 +75,14 @@ async function autoVariantSku(productSku: string, value: string) {
 //
 // deriveVariantColorSize resolves color/size for a submitted variant row:
 //   1. If the row already carries an explicit color/size (the Colour+Size
-//      builder always sends both), use them as-is — never re-derived by
+//      builder always sends both), use them as-is Ã¢â‚¬â€ never re-derived by
 //      parsing anything.
-//   2. Else, for the two single-axis variant types ("Colour" / "Size" —
+//   2. Else, for the two single-axis variant types ("Colour" / "Size" Ã¢â‚¬â€
 //      set automatically by the Bag/Colour-only builder and the Size-only
 //      path of the Colour+Size builder), the single `value` the admin
-//      typed/chose IS the color or the size — a direct field mapping, not
+//      typed/chose IS the color or the size Ã¢â‚¬â€ a direct field mapping, not
 //      string parsing.
-//   3. Else (Material/custom/anything else) — genuinely neither; `value`
+//   3. Else (Material/custom/anything else) Ã¢â‚¬â€ genuinely neither; `value`
 //      alone stays authoritative for those, exactly as before Phase 9.
 // ------------------------------------------------------------------
 function deriveVariantColorSize(
@@ -81,7 +99,7 @@ function deriveVariantColorSize(
   return { color: null, size: null };
 }
 
-// The server-generated display value — authoritative source is color/size
+// The server-generated display value Ã¢â‚¬â€ authoritative source is color/size
 // when either is present; falls back to the admin-typed `value` only for
 // Material/custom variants (see deriveVariantColorSize above).
 function deriveVariantValue(
@@ -114,14 +132,14 @@ export async function createProduct(input: ProductInput) {
 
   const parsed = productSchema.parse(input);
 
-  // Best Sellers cap enforcement — see lib/best-sellers/enforce-cap.ts.
+  // Best Sellers cap enforcement Ã¢â‚¬â€ see lib/best-sellers/enforce-cap.ts.
   // A brand-new product can never have already been a Best Seller, so any
   // "best_sellers" flag here is always a new addition and always needs
   // the check (unlike updateProduct, which only checks on a transition).
   if (parsed.featuredFlags.includes(BEST_SELLER_FLAG)) {
     const categorySlug = await getBestSellerCategorySlug(parsed.categoryIds);
     if (!categorySlug) {
-      throw new Error("This product isn't in Bags, Shoes, or Slippers — Best Sellers only applies to those three categories.");
+      throw new Error("This product isn't in Bags, Shoes, or Slippers Ã¢â‚¬â€ Best Sellers only applies to those three categories.");
     }
     await assertBestSellerCapAllows(categorySlug);
   }
@@ -177,11 +195,11 @@ export async function createProduct(input: ProductInput) {
       tags: parsed.tags,
       featuredFlags: parsed.featuredFlags,
       specs: { create: parsed.specs.map((s) => ({ label: s.label, value: s.value })) },
-      // Admin-defined variant type — a plain string, whatever the admin
+      // Admin-defined variant type Ã¢â‚¬â€ a plain string, whatever the admin
       // picked (a preset like "Colour"/"Size" or a custom "Other" value).
       variantType: parsed.hasVariants ? parsed.variantType : null,
       variants: parsed.hasVariants ? { create: variantCreates } : undefined,
-      // Base Inventory only created when the product has NO variants —
+      // Base Inventory only created when the product has NO variants Ã¢â‚¬â€
       // when it does, each variant tracks its own stock instead (see
       // ProductVariant.currentStock and lib/actions/inventory.ts's
       // adjustVariantStock).
@@ -205,10 +223,10 @@ export async function createProduct(input: ProductInput) {
   revalidateTag("products");
 
   // Returns the created variants too (id + value + color), not just the
-  // product id — the product form needs this to know which real variant
+  // product id Ã¢â‚¬â€ the product form needs this to know which real variant
   // IDs were just created for each colour, so staged variant photos
   // (selected before the product existed) can be uploaded and associated
-  // correctly right after creation. See product-form.tsx's onSubmit —
+  // correctly right after creation. See product-form.tsx's onSubmit Ã¢â‚¬â€
   // `color` is the structured field it matches on now (falling back to
   // `value` only for legacy/Material rows without one).
   return {
@@ -231,15 +249,15 @@ export async function updateProduct(id: string, input: ProductInput) {
 
   const existing = await prisma.product.findUniqueOrThrow({ where: { id } });
 
-  // Explicit lifecycle enforcement — not just "accept whatever status was submitted."
+  // Explicit lifecycle enforcement Ã¢â‚¬â€ not just "accept whatever status was submitted."
   assertValidProductTransition(existing.status, parsed.status as ProductStatus);
 
-  // Best Sellers cap enforcement — see lib/best-sellers/enforce-cap.ts for
+  // Best Sellers cap enforcement Ã¢â‚¬â€ see lib/best-sellers/enforce-cap.ts for
   // why this can't just live in the dedicated picker's toggleBestSeller()
   // alone: this form's Homepage Placement checkboxes (featuredTogges.tsx)
   // are a second code path that can set featuredFlags to include
   // "best_sellers", and the validator alone doesn't know about the cap.
-  // Only checked on a NEW addition (wasn't already selected) — a product
+  // Only checked on a NEW addition (wasn't already selected) Ã¢â‚¬â€ a product
   // that's already a Best Seller can be re-saved with unrelated changes
   // without tripping over its own existing selection.
   const wasBestSeller = existing.featuredFlags.includes(BEST_SELLER_FLAG);
@@ -247,7 +265,7 @@ export async function updateProduct(id: string, input: ProductInput) {
   if (willBeBestSeller && !wasBestSeller) {
     const categorySlug = await getBestSellerCategorySlug(parsed.categoryIds);
     if (!categorySlug) {
-      throw new Error("This product isn't in Bags, Shoes, or Slippers — Best Sellers only applies to those three categories.");
+      throw new Error("This product isn't in Bags, Shoes, or Slippers Ã¢â‚¬â€ Best Sellers only applies to those three categories.");
     }
     await assertBestSellerCapAllows(categorySlug, id);
   }
@@ -261,21 +279,21 @@ export async function updateProduct(id: string, input: ProductInput) {
   }
 
   // Neither field has a form input anymore (see lib/validators/product.ts)
-  // — a hidden RHF field carries the existing value forward on every
+  // Ã¢â‚¬â€ a hidden RHF field carries the existing value forward on every
   // save, so these fallbacks are a safety net (e.g. a legacy product that
   // somehow has neither) rather than the normal path.
   const sku = parsed.sku?.trim() ? parsed.sku.trim() : existing.sku;
   const shortDesc = parsed.shortDesc?.trim() ? parsed.shortDesc.trim() : autoShortDesc(parsed.fullDesc);
 
-  // Removing a variant — whether one row at a time or by turning off
-  // "Has Variants" entirely — ARCHIVES it rather than deleting it.
+  // Removing a variant Ã¢â‚¬â€ whether one row at a time or by turning off
+  // "Has Variants" entirely Ã¢â‚¬â€ ARCHIVES it rather than deleting it.
   // Deleting the row would cascade-delete its VariantInventoryLog audit
   // trail, and would SetNull any historical OrderItem.variantId that
-  // referenced it — silently losing which variant was actually ordered
+  // referenced it Ã¢â‚¬â€ silently losing which variant was actually ordered
   // on a past sale. Archiving preserves both. Archived variants are
   // excluded from the edit form, the Inventory page, and the public API
   // (see the `status: { not: "ARCHIVED" }` filters in getProduct,
-  // listInventory, and the public product selects) — so from the
+  // listInventory, and the public product selects) Ã¢â‚¬â€ so from the
   // admin's point of view it looks and behaves like a deletion; the data
   // just isn't actually gone.
   const existingVariantCount = await prisma.productVariant.count({
@@ -285,12 +303,12 @@ export async function updateProduct(id: string, input: ProductInput) {
 
   // ------------------------------------------------------------------
   // Precompute everything that needs an extra DB round trip BEFORE the
-  // transaction opens — mirrors createProduct's existing pattern. This is
+  // transaction opens Ã¢â‚¬â€ mirrors createProduct's existing pattern. This is
   // specifically the SKU-uniqueness lookup for brand-new variant rows
   // (autoVariantSku), which used to run INSIDE the transaction callback,
   // via the plain global `prisma` client rather than `tx`. It never
-  // needed to be inside the atomic boundary — only its RESULT (the
-  // chosen sku) needs to be there — but leaving it inside still extended
+  // needed to be inside the atomic boundary Ã¢â‚¬â€ only its RESULT (the
+  // chosen sku) needs to be there Ã¢â‚¬â€ but leaving it inside still extended
   // how long the transaction's underlying connection was held, since the
   // interactive-transaction timeout counts the callback's whole
   // wall-clock duration, not just the queries issued through `tx`. This
@@ -303,7 +321,7 @@ export async function updateProduct(id: string, input: ProductInput) {
           const colorSize = deriveVariantColorSize(v, parsed.variantType);
           const value = deriveVariantValue(v, colorSize);
           const variantSku = v.id
-            ? undefined // existing row — sku is never touched on update, see below
+            ? undefined // existing row Ã¢â‚¬â€ sku is never touched on update, see below
             : v.sku?.trim()
             ? v.sku.trim()
             : await autoVariantSku(sku, value);
@@ -340,12 +358,12 @@ export async function updateProduct(id: string, input: ProductInput) {
       },
     });
 
-    // Specs: ID-preserving diff — update existing rows in place (matched
+    // Specs: ID-preserving diff Ã¢â‚¬â€ update existing rows in place (matched
     // by id), create new ones (no id), delete ones that were removed.
     // Existing-row updates still run one `tx` call per row (each has
     // different label/value, so they can't be merged into one
     // statement) but now run CONCURRENTLY via Promise.all instead of a
-    // sequential for-loop — same queries, same data, just not blocking
+    // sequential for-loop Ã¢â‚¬â€ same queries, same data, just not blocking
     // each other one-at-a-time. New rows are batched into a single
     // createMany instead of one create() per row.
     const existingSpecs: ProductSpec[] = await tx.productSpec.findMany({ where: { productId: id } });
@@ -392,11 +410,11 @@ export async function updateProduct(id: string, input: ProductInput) {
       await Promise.all(
         toUpdate.map(({ v, colorSize, value }) =>
           // Deliberately NOT touching currentStock/reservedStock/etc.
-          // here — stock changes go through adjustVariantStock only, so
+          // here Ã¢â‚¬â€ stock changes go through adjustVariantStock only, so
           // there's always exactly one code path that mutates stock and
           // always writes a VariantInventoryLog entry. Editing the
           // product form should never silently change stock levels.
-          // sku also isn't touched on an existing row — it was already
+          // sku also isn't touched on an existing row Ã¢â‚¬â€ it was already
           // auto-generated once at creation and shouldn't shift under a
           // variant that may already be referenced by past OrderItems.
           tx.productVariant.update({
@@ -426,7 +444,7 @@ export async function updateProduct(id: string, input: ProductInput) {
       });
 
       // Without this, the product would end up with NO active stock
-      // record at all — no non-archived variants and no base Inventory
+      // record at all Ã¢â‚¬â€ no non-archived variants and no base Inventory
       // row (updateProduct never creates one; only createProduct does).
       // The admin can adjust this to the real count via the Inventory
       // page immediately after saving.
@@ -442,7 +460,7 @@ export async function updateProduct(id: string, input: ProductInput) {
       userId: session.user.id,
       action: "PRODUCT_VARIANTS_ARCHIVED",
       resource: `Product:${id}`,
-      metadata: { variantCount: existingVariantCount, reason: "Admin turned off 'Has Variants'; variants archived, not deleted — inventory history preserved" },
+      metadata: { variantCount: existingVariantCount, reason: "Admin turned off 'Has Variants'; variants archived, not deleted Ã¢â‚¬â€ inventory history preserved" },
     });
   }
 
@@ -464,7 +482,7 @@ export async function updateProduct(id: string, input: ProductInput) {
 // DUPLICATE
 // ------------------------------------------------------------------
 /**
- * Creates a new DRAFT product copied from an existing one — categories,
+ * Creates a new DRAFT product copied from an existing one Ã¢â‚¬â€ categories,
  * pricing, specs, and variant structure carry over; images do NOT (a
  * duplicate needs its own photos, not a second reference to the same
  * Cloudinary assets), and stock starts at 0 for every variant / the base
@@ -497,7 +515,7 @@ export async function duplicateProduct(id: string) {
   const variantCreates = await Promise.all(
     source.variants.map(async (v: { value: string; sku: string; color: string | null; size: string | null }) => ({
       value: v.value,
-      // Structured color/size carry over unchanged — a duplicate is the
+      // Structured color/size carry over unchanged Ã¢â‚¬â€ a duplicate is the
       // same colour/size structure with fresh stock, not a re-derivation.
       color: v.color,
       size: v.size,
@@ -578,7 +596,7 @@ export async function archiveProduct(id: string) {
   revalidateTag("products");
 }
 
-/** Hard delete — only allowed if the product has never been ordered. */
+/** Hard delete Ã¢â‚¬â€ only allowed if the product has never been ordered. */
 export async function deleteProduct(id: string) {
   const session = await requireSession();
   if (!hasPermission(session.user.role, "products:write")) {
@@ -655,7 +673,7 @@ export async function listProducts(params: {
   const safeItems = stripFinancialFieldsFromList(
     items as unknown as Record<string, unknown>[],
     session.user.role
-  );
+  ).map((item) => serializeProductForClient(item));
 
   return {
     items: safeItems,
@@ -680,7 +698,12 @@ export async function getProduct(id: string) {
     },
   });
 
-  return stripFinancialFields(product as unknown as Record<string, unknown>, session.user.role);
+  const safeProduct = stripFinancialFields(
+    product as unknown as Record<string, unknown>,
+    session.user.role
+  );
+
+  return serializeProductForClient(safeProduct);
 }
 
 // ------------------------------------------------------------------
@@ -713,4 +736,4 @@ export async function toggleFeaturedFlag(productId: string, flag: string, enable
   revalidateTag("products");
 }
 
-// Category listing lives in lib/actions/categories.ts (listCategoriesFlat).
+// Category listing lives in lib/actions/categori
