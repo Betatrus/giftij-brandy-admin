@@ -1,92 +1,161 @@
 import { auth } from "@/auth";
 import { getDashboardOverview } from "@/lib/actions/dashboard";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
-import Link from "next/link";
-import { ArrowUp, ArrowDown } from "lucide-react";
-
-function ComparisonNote({ changePercent }: { changePercent: number | null }) {
-  if (changePercent === null) {
-    return <p className="font-body text-[11px] text-ink/30 mt-1">No comparison available</p>;
-  }
-  const isUp = changePercent >= 0;
-  return (
-    <p className={`flex items-center gap-1 font-body text-[11px] mt-1 ${isUp ? "text-green-700" : "text-red-600"}`}>
-      {isUp ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
-      {Math.abs(changePercent)}% from yesterday
-    </p>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  href,
-  changePercent,
-}: {
-  label: string;
-  value: string;
-  href?: string;
-  changePercent?: number | null;
-}) {
-  const content = (
-    <>
-      <p className="font-body text-xs text-ink/50 mb-1">{label}</p>
-      <p className="font-display text-2xl text-ink">{value}</p>
-      {changePercent !== undefined && <ComparisonNote changePercent={changePercent} />}
-    </>
-  );
-
-  if (href) {
-    return (
-      <Link
-        href={href}
-        className="block bg-white rounded-2xl shadow-soft p-5 hover:shadow-md hover:-translate-y-0.5 transition-all"
-      >
-        {content}
-      </Link>
-    );
-  }
-
-  return <div className="bg-white rounded-2xl shadow-soft p-5">{content}</div>;
-}
+import { MetricCard } from "@/components/admin/shared/metric-card";
+import { formatNaira } from "@/lib/utils/format-money";
 
 export default async function DashboardPage() {
   const session = await auth();
-  const overview = await getDashboardOverview();
+
+  const overview =
+    await getDashboardOverview();
 
   return (
-    <div>
-      <Breadcrumbs items={[{ label: "Home" }]} />
-      <h1 className="font-display text-2xl text-ink mb-1">Dashboard</h1>
-      <p className="font-body text-sm text-ink/50 mb-6">
-        Welcome back{session?.user?.name ? `, ${session.user.name}` : ""}.
-      </p>
+    <div className="max-w-[1500px]">
+      <Breadcrumbs
+        items={[{ label: "Home" }]}
+      />
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Orders Today" value={String(overview.orders.value)} changePercent={overview.orders.changePercent} href="/admin/orders" />
-        <StatCard label="Pending Orders" value={String(overview.pendingOrderCount)} href="/admin/orders?status=PENDING" />
-        <StatCard label="Products" value={String(overview.productCount)} href="/admin/products" />
-        <StatCard label="Low Stock" value={String(overview.lowStockCount)} href="/admin/inventory?lowStock=true" />
+      <div className="mb-7">
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-ink sm:text-[28px]">
+          Dashboard
+        </h1>
 
-        {overview.revenue && (
-          <StatCard
-            label="Revenue Today"
-            value={`₦${overview.revenue.value.toLocaleString()}`}
-            changePercent={overview.revenue.changePercent}
-          />
-        )}
-        {overview.profit && (
-          <StatCard
-            label="Profit Today"
-            value={`₦${overview.profit.value.toLocaleString()}`}
-            changePercent={overview.profit.changePercent}
-          />
-        )}
+        <p className="mt-1 font-body text-sm text-ink/45">
+          Welcome back
+          {session?.user?.name
+            ? `, ${session.user.name}`
+            : ""}
+          . Here&apos;s how the business is
+          performing today.
+        </p>
       </div>
 
+      <section className="mb-8">
+        <div className="mb-3">
+          <h2 className="font-body text-sm font-medium text-ink">
+            Today&apos;s performance
+          </h2>
+
+          <p className="mt-0.5 font-body text-xs text-ink/40">
+            Orders and financial performance
+            so far today.
+          </p>
+        </div>
+
+        <div
+          className={`grid gap-4 ${
+            overview.revenue &&
+            overview.profit
+              ? "md:grid-cols-3"
+              : "md:grid-cols-2"
+          }`}
+        >
+          <MetricCard
+            label="Orders Today"
+            value={overview.orders.value.toLocaleString(
+              "en-NG",
+            )}
+            changePercent={
+              overview.orders
+                .changePercent
+            }
+            href="/admin/orders"
+            prominent
+          />
+
+          {overview.revenue && (
+            <MetricCard
+              label="Revenue Today"
+              value={formatNaira(
+                overview.revenue.value,
+              )}
+              changePercent={
+                overview.revenue
+                  .changePercent
+              }
+              prominent
+            />
+          )}
+
+          {overview.profit && (
+            <MetricCard
+              label="Profit Today"
+              value={formatNaira(
+                overview.profit.value,
+              )}
+              changePercent={
+                overview.profit
+                  .changePercent
+              }
+              prominent
+            />
+          )}
+        </div>
+      </section>
+
+      <section>
+        <div className="mb-3">
+          <h2 className="font-body text-sm font-medium text-ink">
+            Operations
+          </h2>
+
+          <p className="mt-0.5 font-body text-xs text-ink/40">
+            Current fulfilment, catalogue and
+            inventory status.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard
+            label="Completed Today"
+            value={overview.completedTodayCount.toLocaleString(
+              "en-NG",
+            )}
+            helper="Orders fulfilled today"
+            href="/admin/orders?status=COMPLETED"
+          />
+
+          <MetricCard
+            label="Pending Orders"
+            value={overview.pendingOrderCount.toLocaleString(
+              "en-NG",
+            )}
+            helper="Awaiting acknowledgement"
+            href="/admin/orders?status=PENDING"
+          />
+
+          <MetricCard
+            label="Active Products"
+            value={overview.productCount.toLocaleString(
+              "en-NG",
+            )}
+            helper="Products currently available"
+            href="/admin/products"
+          />
+
+          <MetricCard
+            label="Low Stock"
+            value={overview.lowStockCount.toLocaleString(
+              "en-NG",
+            )}
+            helper={
+              overview.lowStockCount > 0
+                ? "Inventory needs attention"
+                : "Inventory levels are healthy"
+            }
+            warning={
+              overview.lowStockCount > 0
+            }
+            href="/admin/inventory?lowStock=true"
+          />
+        </div>
+      </section>
+
       {!overview.revenue && (
-        <p className="font-body text-xs text-ink/40">
-          Money figures are visible to Super Admin only.
+        <p className="mt-6 font-body text-xs text-ink/40">
+          Financial metrics are available to
+          Super Admin only.
         </p>
       )}
     </div>
