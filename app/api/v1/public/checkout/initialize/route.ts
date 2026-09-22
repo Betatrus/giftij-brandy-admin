@@ -15,69 +15,16 @@ import {
 import { checkoutInitializeSchema } from "@/lib/validators/public/checkout";
 import { resolveCartLines } from "@/lib/orders/resolve-cart";
 import {
-  checkStockAvailability,
-  type UnavailableStockLine,
-} from "@/lib/orders/stock";
-import {
   acquireCheckoutSlot,
 } from "@/lib/orders/checkout-concurrency";
+import {
+  attachPaymentReferenceToReservation,
+  releaseCheckoutReservation,
+  releaseExpiredCheckoutReservations,
+  reserveStockForCheckout,
+  StockReservationUnavailableError,
+} from "@/lib/orders/stock-reservation";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
-
-/**
- * Starts a purchase.
- *
- * SECURITY / CONCURRENCY FLOW
- *
- * 1. Apply per-IP checkout rate limiting.
- * 2. Validate the incoming checkout payload.
- * 3. Pass the request through the adaptive checkout concurrency gate.
- * 4. Resolve productSlug/SKU against the Giftij database.
- * 5. Check live stock for every requested cart line.
- * 6. If any requested quantity cannot be fulfilled:
- *    - stop checkout,
- *    - do not initialize Paystack,
- *    - return exact requested/available quantities,
- *    - include customer-care WhatsApp.
- * 7. Calculate the authoritative order value from database prices.
- * 8. Initialize Paystack.
- * 9. Release the checkout-processing slot.
- * 10. Paystack webhook creates the actual Order only after successful payment.
- *
- * IMPORTANT:
- *
- * This endpoint does NOT reserve or deduct stock.
- *
- * The Paystack webhook remains the final payment authority and performs the
- * authoritative atomic inventory deduction after successful payment.
- *
- * The storefront never receives PAYSTACK_SECRET_KEY.
- */
-
-function formatStockIssue(
-  item: UnavailableStockLine,
-): string {
-  if (item.available <= 0) {
-    return `${item.name} is currently out of stock.`;
-  }
-
-  const unitLabel =
-    item.available === 1
-      ? "unit is"
-      : "units are";
-
-  return `Only ${item.available} ${unitLabel} currently available for ${item.name}. You requested ${item.requested}.`;
-}
-
-function buildStockMessage(
-  unavailable: UnavailableStockLine[],
-): string {
-  const stockIssues =
-    unavailable
-      .map(formatStockIssue)
-      .join(" ");
-
-  return `${stockIssues} Please update your cart before continuing to payment.`;
-}
 
 export async function POST(
   req: NextRequest,
@@ -89,22 +36,17 @@ export async function POST(
     | (() => void)
     | null = null;
 
+  let reservationId:
+    | string
+    | null = null;
+
+  let reservationAttachedToPaystack =
+    false;
+
   try {
     const ip =
       getClientIp(req);
 
-    /*
-     * First line of defence against one client repeatedly hammering
-     * checkout initialization.
-     *
-     * This remains deliberately separate from the concurrency gate:
-     *
-     * rate limiting
-     * -> controls request frequency per client
-     *
-     * concurrency gate
-     * -> smooths simultaneous checkout processing per server instance
-     */
     const rateLimit =
       checkRateLimit(
         `public:checkout-init:${ip}`,
@@ -119,24 +61,51 @@ export async function POST(
       );
     }
 
-    /*
-     * Reject malformed input BEFORE consuming one of the protected
-     * checkout-processing slots.
-     */
     const body =
       checkoutInitializeSchema.parse(
         await req.json(),
       );
 
-    /*
-     * Adaptive application-level concurrency gate.
+    /**
+     * Opportunistic cleanup.
      *
-     * Low traffic passes immediately.
+     * Expired reservations are returned to available inventory before new
+     * admission decisions are made.
      *
-     * Small bursts receive a tiny smoothing delay.
+     * This is deliberately bounded so one checkout never performs an
+     * unlimited cleanup job.
+     */
+    try {
+      await releaseExpiredCheckoutReservations(
+        25,
+      );
+    } catch (
+      cleanupError
+    ) {
+      console.error(
+        "Expired reservation cleanup failed:",
+        cleanupError,
+      );
+
+      /**
+       * Do not block a legitimate checkout merely because cleanup failed.
+       * PostgreSQL reservation rules still protect current inventory.
+       */
+    }
+
+    /**
+     * Resolve the customer's cart before entering the admission gate.
      *
-     * Larger bursts queue locally instead of allowing every request to hit
-     * PostgreSQL and Paystack simultaneously from the same function instance.
+     * This validates product / variant identity and obtains authoritative
+     * prices without trusting browser-supplied IDs or prices.
+     */
+    const resolved =
+      await resolveCartLines(
+        body.cart,
+      );
+
+    /**
+     * Enter the short stock-admission queue.
      */
     releaseCheckoutSlot =
       await acquireCheckoutSlot();
@@ -149,53 +118,51 @@ export async function POST(
     }
 
     /**
-     * Never trust price, product ID or variant ID supplied by the browser.
+     * PostgreSQL performs the real admission decision.
      *
-     * Resolve the storefront's productSlug/SKU against the database first.
+     * Reservation:
+     *
+     * currentStock decreases
+     * reservedStock increases
+     *
+     * Only requests that successfully reserve inventory continue.
      */
-    const resolved =
-      await resolveCartLines(
-        body.cart,
-      );
+    try {
+      const reservation =
+        await reserveStockForCheckout(
+          resolved,
+        );
 
-    /**
-     * Live inventory check immediately before Paystack initialization.
-     *
-     * This is intentionally NOT a reservation.
-     *
-     * PostgreSQL + the Paystack webhook remain authoritative if several
-     * customers reach payment around the same time.
-     */
-    const unavailable =
-      await checkStockAvailability(
-        resolved,
-      );
+      reservationId =
+        reservation.reservationId;
+    } catch (error) {
+      if (
+        error instanceof
+        StockReservationUnavailableError
+      ) {
+        const customerCareWhatsApp =
+          await getCustomerCareWhatsApp();
 
-    if (
-      unavailable.length > 0
-    ) {
-      const customerCareWhatsApp =
-        await getCustomerCareWhatsApp();
+        throw new ApiError(
+          "OUT_OF_STOCK",
+          "Stock is not available. Contact Customer Care.",
+          {
+            customerCareWhatsApp,
+          },
+        );
+      }
 
-      throw new ApiError(
-        "OUT_OF_STOCK",
-        buildStockMessage(
-          unavailable,
-        ),
-        {
-          unavailableItems:
-            unavailable,
-
-          customerCareWhatsApp,
-        },
-      );
+      throw error;
+    } finally {
+      /**
+       * The admission queue controls only the stock reservation stage.
+       *
+       * Do not make the next batch wait for Paystack.
+       */
+      releaseCheckoutSlot?.();
+      releaseCheckoutSlot = null;
     }
 
-    /**
-     * All requested quantities are available at this moment.
-     *
-     * Calculate the payment amount exclusively from current database prices.
-     */
     const amountNaira =
       resolved.reduce(
         (sum, line) =>
@@ -230,13 +197,7 @@ export async function POST(
       "https://www.giftijbrandy.com";
 
     /**
-     * Paystack is contacted only after:
-     *
-     * - request validation
-     * - rate limiting
-     * - concurrency gating
-     * - cart resolution
-     * - live inventory validation
+     * Only admitted customers reach Paystack.
      */
     const paystackRes =
       await fetch(
@@ -265,11 +226,9 @@ export async function POST(
             callback_url:
               `${storefrontUrl}/checkout/callback`,
 
-            /**
-             * Keep the metadata contract expected by the existing
-             * Paystack webhook.
-             */
             metadata: {
+              reservationId,
+
               cart:
                 resolved.map(
                   (line) => ({
@@ -330,6 +289,14 @@ export async function POST(
       );
     }
 
+    await attachPaymentReferenceToReservation(
+      reservationId,
+      paystackJson.data.reference,
+    );
+
+    reservationAttachedToPaystack =
+      true;
+
     return withCors(
       ok({
         authorizationUrl:
@@ -348,16 +315,38 @@ export async function POST(
       origin,
     );
   } catch (error) {
+    /**
+     * If inventory was claimed but a usable Paystack checkout was never
+     * handed to the customer, immediately return that stock.
+     */
+    if (
+      reservationId &&
+      !reservationAttachedToPaystack
+    ) {
+      try {
+        await releaseCheckoutReservation(
+          reservationId,
+        );
+      } catch (
+        releaseError
+      ) {
+        console.error(
+          "Failed to release checkout reservation after initialization error:",
+          releaseError,
+        );
+      }
+    }
+
     return withCors(
       fail(error),
       origin,
     );
   } finally {
-    /*
-     * Absolutely critical:
+    /**
+     * Safety fallback.
      *
-     * success, validation failure, stock failure, Paystack failure, or
-     * unexpected exception must all release the concurrency slot.
+     * Usually this is already null because admission is released immediately
+     * after the reservation attempt.
      */
     releaseCheckoutSlot?.();
   }

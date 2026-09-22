@@ -1,129 +1,286 @@
 /**
- * Lightweight adaptive checkout concurrency gate.
+ * Adaptive checkout admission queue.
  *
  * PURPOSE
  * -------
- * This gate smooths sudden checkout bursts before they reach:
  *
- * - cart resolution
- * - inventory reads
- * - Paystack transaction initialization
+ * This queue smooths short traffic bursts immediately before the
+ * PostgreSQL inventory reservation.
  *
  * It is NOT the source of truth for inventory.
  *
- * PostgreSQL remains authoritative, and the Paystack webhook still performs
- * the final atomic stock deduction after successful payment.
+ * PostgreSQL remains the authoritative protection against overselling.
  *
- * SERVERLESS LIMITATION
- * ---------------------
- * This state exists only inside one running Vercel function instance.
+ * TRAFFIC BEHAVIOUR
+ * -----------------
  *
- * Multiple Vercel instances/regions do NOT share these counters.
+ * 1-10 requests:
+ *   one very small batch
  *
- * That is intentional for the current MVP. If Giftij later requires global
- * coordination, this module can be replaced by Redis/KV-backed coordination
- * without changing the checkout business rules.
+ * 11-50 requests:
+ *   one batch
+ *
+ * 51-200 requests:
+ *   batches of 25
+ *
+ * 201+ requests:
+ *   batches of 50
+ *
+ * Requests are briefly coalesced so we can recognize the size of a traffic
+ * burst before deciding its batch size.
+ *
+ * The selected batch size remains fixed until that burst is drained.
+ *
+ * SERVERLESS NOTE
+ * ---------------
+ *
+ * This queue exists inside one running server instance.
+ *
+ * Multiple Vercel instances do not share this in-memory queue.
+ *
+ * That is acceptable because this module is only for traffic smoothing.
+ *
+ * PostgreSQL performs the actual atomic stock admission globally.
  */
 
-const MAX_ACTIVE_CHECKOUTS = 10;
-const MAX_QUEUED_CHECKOUTS = 50;
-
-let activeCheckouts = 0;
-
-const waitingQueue: Array<() => void> =
-  [];
+const MAX_ACTIVE_ADMISSIONS = 50;
+const MAX_WAITING_ADMISSIONS = 1000;
 
 /**
- * Adaptive smoothing delay.
+ * Very short hold used to collect requests arriving at effectively the same
+ * time into one identifiable burst.
  *
- * Low load:
- *   1-2 requests -> no artificial delay
- *
- * Small burst:
- *   3-10 requests -> roughly 25-75ms
- *
- * High burst:
- *   11+ requests -> roughly 75-150ms
+ * 10ms is intentionally tiny from the customer's perspective.
  */
-function getAdaptiveDelay(
-  pressure: number,
-): number {
-  if (pressure <= 2) {
-    return 0;
-  }
+const COALESCE_WINDOW_MS = 10;
 
-  if (pressure <= 10) {
-    return Math.min(
-      75,
-      25 + (pressure - 3) * 7,
+/**
+ * Gap between admission waves.
+ */
+const BATCH_GAP_MS = 20;
+
+let activeAdmissions = 0;
+
+const waitingQueue: Array<
+  () => void
+> = [];
+
+/**
+ * Once a burst is classified, keep its batch size until the entire burst
+ * drains.
+ */
+let currentBurstBatchSize:
+  | number
+  | null = null;
+
+let dispatchTimer:
+  | ReturnType<typeof setTimeout>
+  | null = null;
+
+/**
+ * Classifies one collected burst.
+ */
+function determineBurstBatchSize(
+  requestCount: number,
+): number {
+  if (requestCount <= 10) {
+    return Math.max(
+      1,
+      requestCount,
     );
   }
 
-  return Math.min(
-    150,
-    75 + (pressure - 11) * 5,
-  );
-}
-
-function sleep(ms: number) {
-  if (ms <= 0) {
-    return Promise.resolve();
+  if (requestCount <= 50) {
+    return requestCount;
   }
 
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  if (requestCount <= 200) {
+    return 25;
+  }
+
+  return 50;
 }
 
 /**
- * Acquires one checkout-processing slot.
+ * Schedules the next queue dispatch.
  *
- * Returns:
+ * Only one timer may exist at once.
+ */
+function scheduleDispatch(
+  delayMs: number,
+) {
+  if (dispatchTimer) {
+    return;
+  }
+
+  dispatchTimer =
+    setTimeout(() => {
+      dispatchTimer = null;
+
+      dispatchWaitingBatch();
+    }, delayMs);
+}
+
+/**
+ * Releases the next admission wave.
+ */
+function dispatchWaitingBatch() {
+  if (
+    waitingQueue.length === 0
+  ) {
+    maybeResetBurst();
+
+    return;
+  }
+
+  /**
+   * The first dispatch determines the character of the whole burst.
+   *
+   * Because every incoming request initially waits through the very short
+   * coalescing window, waitingQueue.length now gives us a useful picture of
+   * how much traffic arrived together.
+   */
+  if (
+    currentBurstBatchSize ===
+    null
+  ) {
+    currentBurstBatchSize =
+      determineBurstBatchSize(
+        waitingQueue.length,
+      );
+  }
+
+  const availableSlots =
+    Math.max(
+      0,
+      MAX_ACTIVE_ADMISSIONS -
+        activeAdmissions,
+    );
+
+  if (
+    availableSlots === 0
+  ) {
+    /**
+     * Existing admissions will schedule the next dispatch when they release
+     * their slots.
+     */
+    return;
+  }
+
+  const releaseCount =
+    Math.min(
+      currentBurstBatchSize,
+      availableSlots,
+      waitingQueue.length,
+    );
+
+  for (
+    let index = 0;
+    index < releaseCount;
+    index += 1
+  ) {
+    const next =
+      waitingQueue.shift();
+
+    if (!next) {
+      break;
+    }
+
+    activeAdmissions += 1;
+
+    next();
+  }
+
+  /**
+   * If capacity still exists, allow another wave after the configured gap.
+   *
+   * Example:
+   *
+   * medium burst = 60
+   *
+   * wave 1 = 25
+   * active = 25
+   * waiting = 35
+   *
+   * 20ms later:
+   * wave 2 = 25
+   * active = 50
+   * waiting = 10
+   *
+   * remaining traffic waits until capacity becomes available.
+   */
+  if (
+    waitingQueue.length > 0 &&
+    activeAdmissions <
+      MAX_ACTIVE_ADMISSIONS
+  ) {
+    scheduleDispatch(
+      BATCH_GAP_MS,
+    );
+  }
+}
+
+/**
+ * Enters the local checkout admission queue.
  *
- * - a release callback when admitted
- * - null when the local queue is completely saturated
+ * Returns a release callback when admitted.
+ *
+ * Returns null only if the local waiting queue has reached its emergency
+ * protection limit.
  */
 export async function acquireCheckoutSlot(): Promise<
   (() => void) | null
 > {
-  const pressure =
-    activeCheckouts +
-    waitingQueue.length +
-    1;
-
-  const adaptiveDelay =
-    getAdaptiveDelay(pressure);
-
-  await sleep(adaptiveDelay);
-
-  if (
-    activeCheckouts <
-    MAX_ACTIVE_CHECKOUTS
-  ) {
-    activeCheckouts += 1;
-
-    return createReleaseFunction();
-  }
-
   if (
     waitingQueue.length >=
-    MAX_QUEUED_CHECKOUTS
+    MAX_WAITING_ADMISSIONS
   ) {
     return null;
   }
 
-  await new Promise<void>((resolve) => {
-    waitingQueue.push(resolve);
-  });
+  await new Promise<void>(
+    (resolve) => {
+      waitingQueue.push(
+        resolve,
+      );
 
-  /*
-   * A slot was transferred directly from the request that released it.
-   *
-   * Therefore activeCheckouts does not need to be incremented again here.
-   */
+      /**
+       * When a completely new burst begins, wait a tiny amount so concurrent
+       * requests can collect before we classify the burst.
+       */
+      if (
+        activeAdmissions === 0 &&
+        currentBurstBatchSize ===
+          null
+      ) {
+        scheduleDispatch(
+          COALESCE_WINDOW_MS,
+        );
+
+        return;
+      }
+
+      /**
+       * Traffic arriving while an existing burst is already active joins that
+       * burst and uses the same batch size.
+       */
+      if (
+        activeAdmissions <
+          MAX_ACTIVE_ADMISSIONS
+      ) {
+        scheduleDispatch(
+          BATCH_GAP_MS,
+        );
+      }
+    },
+  );
+
   return createReleaseFunction();
 }
 
+/**
+ * Creates an idempotent release callback for one admitted request.
+ */
 function createReleaseFunction(): () => void {
   let released = false;
 
@@ -134,45 +291,69 @@ function createReleaseFunction(): () => void {
 
     released = true;
 
-    const next =
-      waitingQueue.shift();
+    activeAdmissions =
+      Math.max(
+        0,
+        activeAdmissions - 1,
+      );
 
-    if (next) {
-      /*
-       * Transfer this active slot directly to the next queued checkout.
-       *
-       * activeCheckouts stays unchanged.
-       */
-      next();
+    /**
+     * If requests are still waiting, start the next wave after the short
+     * inter-batch gap.
+     */
+    if (
+      waitingQueue.length > 0
+    ) {
+      scheduleDispatch(
+        BATCH_GAP_MS,
+      );
 
       return;
     }
 
-    activeCheckouts =
-      Math.max(
-        0,
-        activeCheckouts - 1,
-      );
+    maybeResetBurst();
   };
 }
 
 /**
- * Diagnostic snapshot for server-side logging/testing.
+ * Once all requests from the current burst have completed, clear its
+ * classification so the next traffic event can be classified independently.
+ */
+function maybeResetBurst() {
+  if (
+    activeAdmissions === 0 &&
+    waitingQueue.length === 0
+  ) {
+    currentBurstBatchSize =
+      null;
+  }
+}
+
+/**
+ * Server-side diagnostics only.
  *
- * Do not expose this publicly as an API endpoint.
+ * Do not expose this publicly.
  */
 export function getCheckoutConcurrencySnapshot() {
   return {
     active:
-      activeCheckouts,
+      activeAdmissions,
 
     queued:
       waitingQueue.length,
 
     maxActive:
-      MAX_ACTIVE_CHECKOUTS,
+      MAX_ACTIVE_ADMISSIONS,
 
     maxQueued:
-      MAX_QUEUED_CHECKOUTS,
+      MAX_WAITING_ADMISSIONS,
+
+    batchGapMs:
+      BATCH_GAP_MS,
+
+    coalesceWindowMs:
+      COALESCE_WINDOW_MS,
+
+    currentBurstBatchSize,
   };
 }

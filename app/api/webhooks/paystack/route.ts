@@ -1,4 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 import crypto from "crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -11,6 +14,10 @@ import {
   deductStockForOrder,
   type CartLine,
 } from "@/lib/orders/stock";
+import {
+  consumeCheckoutReservation,
+  releaseCheckoutReservationByReference,
+} from "@/lib/orders/stock-reservation";
 import { computeEffectivePrice } from "@/lib/pricing/effective-price";
 import { generateUniqueValueLike } from "@/lib/utils/slug";
 
@@ -18,6 +25,7 @@ export const runtime = "nodejs";
 
 type PaystackWebhookEvent = {
   event: string;
+
   data: {
     reference: string;
     amount: number;
@@ -31,13 +39,18 @@ type PaystackWebhookEvent = {
     };
 
     metadata?: {
+      reservationId?: string;
+
       cart?: {
         productId: string;
         variantId?: string;
         quantity: number;
       }[];
 
-      shippingAddress?: Record<string, unknown>;
+      shippingAddress?: Record<
+        string,
+        unknown
+      >;
 
       [key: string]: unknown;
     };
@@ -46,160 +59,232 @@ type PaystackWebhookEvent = {
 
 function verifySignature(
   rawBody: string,
-  signatureHeader: string | null
+  signatureHeader: string | null,
 ): boolean {
-  const secret = process.env.PAYSTACK_SECRET_KEY;
+  const secret =
+    process.env.PAYSTACK_SECRET_KEY;
 
-  if (!secret || !signatureHeader) {
+  if (
+    !secret ||
+    !signatureHeader
+  ) {
     return false;
   }
 
-  const expected = crypto
-    .createHmac("sha512", secret)
-    .update(rawBody)
-    .digest("hex");
+  const expected =
+    crypto
+      .createHmac(
+        "sha512",
+        secret,
+      )
+      .update(rawBody)
+      .digest("hex");
 
-  const expectedBuffer = Buffer.from(expected);
-  const receivedBuffer = Buffer.from(signatureHeader);
+  const expectedBuffer =
+    Buffer.from(expected);
 
-  if (expectedBuffer.length !== receivedBuffer.length) {
+  const receivedBuffer =
+    Buffer.from(
+      signatureHeader,
+    );
+
+  if (
+    expectedBuffer.length !==
+    receivedBuffer.length
+  ) {
     return false;
   }
 
-  return crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
+  return crypto.timingSafeEqual(
+    expectedBuffer,
+    receivedBuffer,
+  );
 }
 
 function parseCartFromMetadata(
-  data: PaystackWebhookEvent["data"]
+  data: PaystackWebhookEvent["data"],
 ): CartLine[] {
-  const cart = data.metadata?.cart;
+  const cart =
+    data.metadata?.cart;
 
-  if (!Array.isArray(cart) || cart.length === 0) {
+  if (
+    !Array.isArray(cart) ||
+    cart.length === 0
+  ) {
     throw new Error(
-      "Webhook payload has no metadata.cart and order items cannot be reconstructed."
+      "Webhook payload has no metadata.cart and order items cannot be reconstructed.",
     );
   }
 
-  return cart.map((line) => ({
-    productId: line.productId,
-    variantId: line.variantId ?? null,
-    quantity: line.quantity,
-  }));
+  return cart.map(
+    (line) => ({
+      productId:
+        line.productId,
+
+      variantId:
+        line.variantId ??
+        null,
+
+      quantity:
+        line.quantity,
+    }),
+  );
 }
 
 function readString(
-  object: Record<string, unknown> | undefined,
-  key: string
+  object:
+    | Record<string, unknown>
+    | undefined,
+  key: string,
 ): string {
-  const value = object?.[key];
+  const value =
+    object?.[key];
 
-  return typeof value === "string"
+  return typeof value ===
+    "string"
     ? value.trim()
     : "";
 }
 
 /**
- * Customer delivery/contact information should come primarily from the
- * Giftij checkout form.
- *
- * Paystack customer information is only used as a fallback because
- * Paystack does not necessarily return the full name/phone entered on
- * Giftij's own checkout page.
+ * Giftij checkout details take priority over Paystack customer profile data.
  */
 function getCheckoutCustomerDetails(
-  data: PaystackWebhookEvent["data"]
+  data: PaystackWebhookEvent["data"],
 ) {
   const shippingAddress =
-    data.metadata?.shippingAddress &&
-    typeof data.metadata.shippingAddress === "object"
-      ? data.metadata.shippingAddress
+    data.metadata
+      ?.shippingAddress &&
+    typeof data.metadata
+      .shippingAddress ===
+      "object"
+      ? data.metadata
+          .shippingAddress
       : undefined;
 
-  const checkoutName = readString(
-    shippingAddress,
-    "fullName"
-  );
+  const checkoutName =
+    readString(
+      shippingAddress,
+      "fullName",
+    );
 
-  const checkoutPhone = readString(
-    shippingAddress,
-    "phone"
-  );
+  const checkoutPhone =
+    readString(
+      shippingAddress,
+      "phone",
+    );
 
   const country =
-    readString(shippingAddress, "country") ||
-    readString(shippingAddress, "countryCode");
+    readString(
+      shippingAddress,
+      "country",
+    ) ||
+    readString(
+      shippingAddress,
+      "countryCode",
+    );
 
-  const paystackName = [
-    data.customer?.first_name,
-    data.customer?.last_name,
-  ]
-    .filter(
-      (value): value is string =>
-        typeof value === "string" &&
-        value.trim().length > 0
-    )
-    .join(" ")
-    .trim();
+  const paystackName =
+    [
+      data.customer
+        ?.first_name,
+
+      data.customer
+        ?.last_name,
+    ]
+      .filter(
+        (
+          value,
+        ): value is string =>
+          typeof value ===
+            "string" &&
+          value.trim()
+            .length > 0,
+      )
+      .join(" ")
+      .trim();
 
   const name =
     checkoutName ||
     paystackName ||
-    data.customer?.email ||
+    data.customer
+      ?.email ||
     "";
 
   const phone =
     checkoutPhone ||
-    data.customer?.phone?.trim() ||
+    data.customer
+      ?.phone?.trim() ||
     null;
 
   return {
     shippingAddress,
     name,
     phone,
-    country: country || null,
+    country:
+      country || null,
   };
 }
 
 async function generateOrderNumber() {
-  const base = `GB${new Date().getFullYear()}`;
+  const base =
+    `GB${new Date().getFullYear()}`;
 
   return generateUniqueValueLike(
     base,
-    async (candidate) => {
+    async (
+      candidate,
+    ) => {
       const existing =
-        await prisma.order.findUnique({
-          where: {
-            orderNumber: candidate,
+        await prisma.order.findUnique(
+          {
+            where: {
+              orderNumber:
+                candidate,
+            },
           },
-        });
+        );
 
       return !!existing;
-    }
+    },
   );
 }
 
-export async function POST(req: NextRequest) {
-  const rawBody = await req.text();
+export async function POST(
+  req: NextRequest,
+) {
+  const rawBody =
+    await req.text();
 
-  const signature = req.headers.get(
-    "x-paystack-signature"
-  );
+  const signature =
+    req.headers.get(
+      "x-paystack-signature",
+    );
 
-  if (!verifySignature(rawBody, signature)) {
+  if (
+    !verifySignature(
+      rawBody,
+      signature,
+    )
+  ) {
     return NextResponse.json(
       {
         received: false,
       },
       {
         status: 401,
-      }
+      },
     );
   }
 
-  let event: PaystackWebhookEvent;
+  let event:
+    PaystackWebhookEvent;
 
   try {
-    event = JSON.parse(rawBody);
+    event =
+      JSON.parse(
+        rawBody,
+      );
   } catch {
     return NextResponse.json(
       {
@@ -207,32 +292,52 @@ export async function POST(req: NextRequest) {
       },
       {
         status: 400,
-      }
+      },
     );
   }
 
   try {
-    if (event.event === "charge.success") {
-      await handleChargeSuccess(event.data);
-    } else if (event.event === "charge.failed") {
-      await handleChargeFailed(event.data);
+    if (
+      event.event ===
+      "charge.success"
+    ) {
+      await handleChargeSuccess(
+        event.data,
+      );
+    } else if (
+      event.event ===
+      "charge.failed"
+    ) {
+      await handleChargeFailed(
+        event.data,
+      );
     }
   } catch (err) {
     console.error(
       "Paystack webhook processing error:",
-      err
+      err,
     );
 
     await logActivity({
-      systemSource: "paystack_webhook",
-      action: "WEBHOOK_PROCESSING_ERROR",
-      resource: `PaystackEvent:${event.event}`,
+      systemSource:
+        "paystack_webhook",
+
+      action:
+        "WEBHOOK_PROCESSING_ERROR",
+
+      resource:
+        `PaystackEvent:${event.event}`,
+
       metadata: {
         error:
-          err instanceof Error
+          err instanceof
+          Error
             ? err.message
             : String(err),
-        reference: event.data?.reference,
+
+        reference:
+          event.data
+            ?.reference,
       },
     });
   }
@@ -243,119 +348,150 @@ export async function POST(req: NextRequest) {
     },
     {
       status: 200,
-    }
+    },
   );
 }
 
 async function handleChargeSuccess(
-  data: PaystackWebhookEvent["data"]
+  data: PaystackWebhookEvent["data"],
 ) {
   /**
-   * Duplicate webhook protection.
+   * Paystack may retry the same webhook.
    *
-   * Paystack may retry webhook deliveries, so an already-created order
-   * must never be created again.
+   * If the Order already exists for this reference, everything was already
+   * processed successfully and we must not consume stock twice.
    */
   const existingOrder =
-    await prisma.order.findFirst({
-      where: {
-        paymentReference: data.reference,
+    await prisma.order.findFirst(
+      {
+        where: {
+          paymentReference:
+            data.reference,
+        },
       },
-    });
+    );
 
   if (existingOrder) {
     return;
   }
 
-  const email = data.customer?.email
-    ?.trim()
-    .toLowerCase();
+  const email =
+    data.customer
+      ?.email
+      ?.trim()
+      .toLowerCase();
 
   if (!email) {
     throw new Error(
-      "charge.success webhook has no customer email and identity cannot be resolved."
+      "charge.success webhook has no customer email and identity cannot be resolved.",
     );
   }
 
-  /**
-   * Giftij checkout information takes priority over Paystack's customer
-   * profile information.
-   */
   const {
     shippingAddress,
     name,
     phone,
     country,
-  } = getCheckoutCustomerDetails(data);
+  } =
+    getCheckoutCustomerDetails(
+      data,
+    );
 
   const customer =
-    await findOrCreateCustomerByEmail({
-      email,
-      name,
-      phone,
+    await findOrCreateCustomerByEmail(
+      {
+        email,
+        name,
+        phone,
 
-      address: shippingAddress
-        ? (shippingAddress as Prisma.InputJsonValue)
-        : undefined,
+        address:
+          shippingAddress
+            ? (shippingAddress as Prisma.InputJsonValue)
+            : undefined,
 
-      country: country ?? undefined,
-    });
+        country:
+          country ??
+          undefined,
+      },
+    );
 
   const cartLines =
-    parseCartFromMetadata(data);
+    parseCartFromMetadata(
+      data,
+    );
 
   const products =
-    await prisma.product.findMany({
-      where: {
-        id: {
-          in: cartLines.map(
-            (line) => line.productId
-          ),
+    await prisma.product.findMany(
+      {
+        where: {
+          id: {
+            in:
+              cartLines.map(
+                (line) =>
+                  line.productId,
+              ),
+          },
+        },
+
+        select: {
+          id: true,
+          price: true,
+          discount: true,
+          costPrice: true,
         },
       },
+    );
 
-      select: {
-        id: true,
-        price: true,
-        discount: true,
-        costPrice: true,
-      },
-    });
-
-  const productById = new Map(
-    products.map((product) => [
-      product.id,
-      product,
-    ])
-  );
+  const productById =
+    new Map(
+      products.map(
+        (product) => [
+          product.id,
+          product,
+        ],
+      ),
+    );
 
   let subtotal = 0;
   let costBasis = 0;
 
   const effectiveUnitPriceByLine =
-    new Map<string, number>();
+    new Map<
+      string,
+      number
+    >();
 
-  for (const line of cartLines) {
+  for (
+    const line of
+    cartLines
+  ) {
     const product =
-      productById.get(line.productId);
+      productById.get(
+        line.productId,
+      );
 
     if (!product) {
       throw new Error(
-        `Cart references unknown product ${line.productId}`
+        `Cart references unknown product ${line.productId}`,
       );
     }
 
     const effectiveUnitPrice =
       computeEffectivePrice(
-        Number(product.price),
+        Number(
+          product.price,
+        ),
+
         product.discount
-          ? Number(product.discount)
-          : 0
+          ? Number(
+              product.discount,
+            )
+          : 0,
       );
 
     effectiveUnitPriceByLine.set(
       `${line.productId}:${line.variantId ?? ""}`,
-      effectiveUnitPrice
+      effectiveUnitPrice,
     );
 
     subtotal +=
@@ -363,7 +499,9 @@ async function handleChargeSuccess(
       line.quantity;
 
     costBasis +=
-      Number(product.costPrice) *
+      Number(
+        product.costPrice,
+      ) *
       line.quantity;
   }
 
@@ -373,112 +511,175 @@ async function handleChargeSuccess(
   const order =
     await prisma.$transaction(
       async (tx) => {
+        /**
+         * NEW RESERVATION PATH
+         *
+         * The checkout already removed these units from currentStock and moved
+         * them into reservedStock.
+         *
+         * Successful payment therefore converts:
+         *
+         * reservedStock -> soldStock
+         *
+         * currentStock is NOT decremented again.
+         */
+        const reservationResult =
+          await consumeCheckoutReservation(
+            tx,
+            data.reference,
+          );
+
+        /**
+         * Compatibility / safety fallback.
+         *
+         * There may still be successful Paystack transactions created before
+         * the reservation system was deployed.
+         *
+         * A reservation may also have expired and returned its stock before a
+         * very late successful payment webhook arrives.
+         *
+         * In those cases we preserve the successful paid order and fall back
+         * to the old atomic deduction logic.
+         */
+        let fallbackShortfalls:
+          {
+            productId: string;
+            variantId?:
+              | string
+              | null;
+            requested: number;
+            deducted: number;
+          }[] = [];
+
+        if (
+          !reservationResult.consumed
+        ) {
+          const fallback =
+            await deductStockForOrder(
+              tx,
+              cartLines,
+            );
+
+          fallbackShortfalls =
+            fallback.shortfalls;
+        }
+
         const created =
-          await tx.order.create({
-            data: {
-              orderNumber,
+          await tx.order.create(
+            {
+              data: {
+                orderNumber,
 
-              customerId:
-                customer.id,
+                customerId:
+                  customer.id,
 
-              status: "PENDING",
+                status:
+                  "PENDING",
 
-              shippingAddress:
-                (data.metadata
-                  ?.shippingAddress ??
-                  {}) as object,
+                shippingAddress:
+                  (data.metadata
+                    ?.shippingAddress ??
+                    {}) as object,
 
-              paymentReference:
-                data.reference,
+                paymentReference:
+                  data.reference,
 
-              subtotal,
+                subtotal,
 
-              profit:
-                subtotal -
-                costBasis,
+                profit:
+                  subtotal -
+                  costBasis,
 
-              items: {
-                create:
-                  cartLines.map(
-                    (line) => ({
-                      productId:
-                        line.productId,
+                items: {
+                  create:
+                    cartLines.map(
+                      (
+                        line,
+                      ) => ({
+                        productId:
+                          line.productId,
 
-                      variantId:
-                        line.variantId ??
-                        null,
+                        variantId:
+                          line.variantId ??
+                          null,
 
-                      quantity:
-                        line.quantity,
+                        quantity:
+                          line.quantity,
 
-                      unitPrice:
-                        effectiveUnitPriceByLine.get(
-                          `${line.productId}:${line.variantId ?? ""}`
-                        )!,
-                    })
-                  ),
-              },
+                        unitPrice:
+                          effectiveUnitPriceByLine.get(
+                            `${line.productId}:${line.variantId ?? ""}`,
+                          )!,
+                      }),
+                    ),
+                },
 
-              timeline: {
-                create: {
-                  label:
-                    "Payment Confirmed",
+                timeline: {
+                  create: {
+                    label:
+                      "Payment Confirmed",
+                  },
                 },
               },
             },
-          });
-
-        /**
-         * Final authoritative inventory deduction.
-         *
-         * This happens after successful payment and inside the order
-         * transaction.
-         */
-        const { shortfalls } =
-          await deductStockForOrder(
-            tx,
-            cartLines
           );
 
         if (
-          shortfalls.length > 0
+          fallbackShortfalls.length >
+          0
         ) {
-          await tx.orderNote.create({
-            data: {
-              orderId:
-                created.id,
+          await tx.orderNote.create(
+            {
+              data: {
+                orderId:
+                  created.id,
 
-              note:
-                `Stock shortfall at fulfillment: ${shortfalls
-                  .map(
-                    (shortfall) =>
-                      `${shortfall.productId}${
-                        shortfall.variantId
-                          ? `/${shortfall.variantId}`
-                          : ""
-                      } requested ${shortfall.requested}, only ${shortfall.deducted} available`
-                  )
-                  .join("; ")}`,
+                note:
+                  `Stock shortfall at fulfillment: ${fallbackShortfalls
+                    .map(
+                      (
+                        shortfall,
+                      ) =>
+                        `${shortfall.productId}${
+                          shortfall.variantId
+                            ? `/${shortfall.variantId}`
+                            : ""
+                        } requested ${shortfall.requested}, only ${shortfall.deducted} available`,
+                    )
+                    .join(
+                      "; ",
+                    )}`,
 
-              createdBy:
-                "system:paystack_webhook",
+                createdBy:
+                  "system:paystack_webhook",
+              },
             },
-          });
+          );
         }
 
-        return created;
-      }
+        return {
+          order:
+            created,
+
+          usedReservation:
+            reservationResult.consumed,
+        };
+      },
     );
 
-  await prisma.customer.update({
-    where: {
-      id: customer.id,
-    },
+  await prisma.customer.update(
+    {
+      where: {
+        id:
+          customer.id,
+      },
 
-    data: {
-      lastPurchase: new Date(),
+      data: {
+        lastPurchase:
+          new Date(),
+      },
     },
-  });
+  );
 
   await logActivity({
     systemSource:
@@ -488,23 +689,75 @@ async function handleChargeSuccess(
       "ORDER_CREATED",
 
     resource:
-      `Order:${order.id}`,
+      `Order:${order.order.id}`,
 
     metadata: {
       orderNumber,
+
       reference:
         data.reference,
+
       subtotal,
+
+      stockSource:
+        order.usedReservation
+          ? "checkout_reservation"
+          : "legacy_or_late_payment_fallback",
     },
   });
 }
 
 async function handleChargeFailed(
-  data: PaystackWebhookEvent["data"]
+  data: PaystackWebhookEvent["data"],
 ) {
-  const email = data.customer?.email
-    ?.trim()
-    .toLowerCase();
+  /**
+   * Failed payment no longer owns the reserved stock.
+   *
+   * Release this BEFORE doing customer CRM work. Even if customer metadata is
+   * incomplete, inventory must not remain locked.
+   */
+  try {
+    await releaseCheckoutReservationByReference(
+      data.reference,
+    );
+  } catch (
+    releaseError
+  ) {
+    console.error(
+      "Failed to release checkout reservation after charge.failed:",
+      releaseError,
+    );
+
+    await logActivity({
+      systemSource:
+        "paystack_webhook",
+
+      action:
+        "RESERVATION_RELEASE_ERROR",
+
+      resource:
+        `PaystackReference:${data.reference}`,
+
+      metadata: {
+        reference:
+          data.reference,
+
+        error:
+          releaseError instanceof
+          Error
+            ? releaseError.message
+            : String(
+                releaseError,
+              ),
+      },
+    });
+  }
+
+  const email =
+    data.customer
+      ?.email
+      ?.trim()
+      .toLowerCase();
 
   if (!email) {
     return;
@@ -515,20 +768,28 @@ async function handleChargeFailed(
     name,
     phone,
     country,
-  } = getCheckoutCustomerDetails(data);
+  } =
+    getCheckoutCustomerDetails(
+      data,
+    );
 
   const customer =
-    await findOrCreateCustomerByEmail({
-      email,
-      name,
-      phone,
+    await findOrCreateCustomerByEmail(
+      {
+        email,
+        name,
+        phone,
 
-      address: shippingAddress
-        ? (shippingAddress as Prisma.InputJsonValue)
-        : undefined,
+        address:
+          shippingAddress
+            ? (shippingAddress as Prisma.InputJsonValue)
+            : undefined,
 
-      country: country ?? undefined,
-    });
+        country:
+          country ??
+          undefined,
+      },
+    );
 
   await recordCustomerEvent(
     customer.id,
@@ -543,7 +804,7 @@ async function handleChargeFailed(
       currency:
         data.currency ??
         "NGN",
-    }
+    },
   );
 
   await logActivity({

@@ -550,3 +550,25 @@ model StoreSettings {
   updatedAt            DateTime @updatedAt
 }
 
+
+enum CheckoutReservationStatus {
+  ACTIVE
+  CONSUMED
+  RELEASED
+  EXPIRED
+}
+
+model CheckoutReservation {
+  id               String                    @id @default(cuid())
+  paymentReference String?                   @unique
+  status           CheckoutReservationStatus @default(ACTIVE)
+  cart             Json
+  expiresAt        DateTime
+  consumedAt       DateTime?
+  releasedAt       DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([createdAt])
+}
