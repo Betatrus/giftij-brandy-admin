@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { AdminShell } from "@/components/admin/admin-shell";
+import { AdminInactivityGuard } from "@/components/admin/admin-inactivity-guard";
 
 export default async function AdminLayout({
   children,
@@ -14,8 +15,15 @@ export default async function AdminLayout({
   }
 
   return (
-    <AdminShell role={session.user.role} userName={session.user.name}>
-      {children}
-    </AdminShell>
+    <>
+      <AdminInactivityGuard />
+
+      <AdminShell
+        role={session.user.role}
+        userName={session.user.name}
+      >
+        {children}
+      </AdminShell>
+    </>
   );
 }
