@@ -7,10 +7,11 @@ import { useState, useEffect } from "react";
 import { StaffRole } from "@prisma/client";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { createProduct, updateProduct } from "@/lib/actions/products";
-import { uploadProductImage, uploadVariantImage } from "@/lib/actions/media";
+import { attachProductImage, replaceVariantImage } from "@/lib/actions/media";
+import { uploadFileDirectToCloudinary } from "@/lib/media/cloudinary-client";
 import { VariantsSection } from "./variants-section";
 import { ImageUploader } from "./image-uploader";
-import { StagedImagePicker, fileToBase64, type StagedImage } from "./staged-image-picker";
+import { StagedImagePicker, type StagedImage } from "./staged-image-picker";
 import { CategorySelect } from "./category-select";
 import { ProductPreview } from "./product-preview";
 import { ProductSaveResultDialog } from "./product-save-result-dialog";
@@ -18,6 +19,21 @@ import { useUnsavedChanges } from "@/lib/context/unsaved-changes-context";
 
 type ExistingImage = { id: string; url: string; sortOrder: number };
 type CategoryOption = { id: string; name: string; slug: string; parentId: string | null };
+
+function friendlySaveError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "We couldn't save this product. Please try again.";
+  }
+
+  if (
+    error.message.includes("Server Components render") ||
+    error.message.includes("digest property")
+  ) {
+    return "We couldn't save the product changes. Your existing product data is still preserved. Please try again. If it continues, contact the administrator.";
+  }
+
+  return error.message || "We couldn't save this product. Please try again.";
+}
 
 export function ProductForm({
   role,
@@ -38,13 +54,13 @@ export function ProductForm({
   const [saving, setSaving] = useState(false);
   // Two-step flow per the confirmed requirement: fill in details, review a
   // customer-facing preview, THEN create. "Edit" from the preview just
-  // flips this back — nothing is lost, the form state underneath is
+  // flips this back â€” nothing is lost, the form state underneath is
   // untouched either way.
   const [step, setStep] = useState<"form" | "preview">("form");
   const [stagedImages, setStagedImages] = useState<StagedImage[]>([]);
   // Keyed by COLOUR (see variant-image-slot.tsx's top comment for why
   // colour, never the full "Colour / Size" combination). Only ever
-  // populated for a brand-new product — an existing product's variant
+  // populated for a brand-new product â€” an existing product's variant
   // images upload immediately on selection instead (VariantImageSlot's
   // EDIT-mode path), so this stays empty whenever productId is set.
   const [stagedVariantImages, setStagedVariantImages] = useState<Record<string, StagedImage>>({});
@@ -61,12 +77,12 @@ export function ProductForm({
   }
 
   // Shown on the preview/creating screen while images upload right after
-  // creation succeeds — "a short delay of a few seconds is completely
+  // creation succeeds â€” "a short delay of a few seconds is completely
   // acceptable," per the confirmed flow, as long as it's ONE continuous
   // process the admin doesn't have to leave and come back to.
   const [uploadStatus, setUploadStatus] = useState<{ done: number; total: number } | null>(null);
 
-  // Set once at the very end of a successful onSubmit — after
+  // Set once at the very end of a successful onSubmit â€” after
   // create/update AND (for a new product) every staged photo upload has
   // fully resolved. Drives the success/partial-failure dialog; null
   // means "don't show it," including for the whole duration any saving/
@@ -107,7 +123,7 @@ export function ProductForm({
   const { setDirty } = useUnsavedChanges();
 
   // Feeds the shared context so the sidebar, breadcrumbs, and back link
-  // all know to confirm before navigating away — not just this form.
+  // all know to confirm before navigating away â€” not just this form.
   useEffect(() => {
     setDirty(isDirty);
   }, [isDirty, setDirty]);
@@ -125,10 +141,10 @@ export function ProductForm({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [isDirty]);
 
-  // Moves from the form to the preview — only after every field passes
+  // Moves from the form to the preview â€” only after every field passes
   // validation, so the preview never shows a half-valid product. Nothing
   // is saved yet; this is purely a client-side view switch. If
-  // validation fails, this must NEVER just silently do nothing — every
+  // validation fails, this must NEVER just silently do nothing â€” every
   // field with a problem now shows its own message (see the Variants
   // section and the Core Details/Pricing fields above), and this banner
   // makes sure the admin notices something needs fixing at all, even if
@@ -143,7 +159,7 @@ export function ProductForm({
     }
   }
 
-  // The ONLY place that actually creates/saves the product — reachable
+  // The ONLY place that actually creates/saves the product â€” reachable
   // only from the preview screen's "Create Product"/"Save Changes"
   // button, matching "Only after clicking Create Product should the
   // product creation process execute."
@@ -152,12 +168,12 @@ export function ProductForm({
   // Create Product -> product is created -> immediately, in this same
   // action, each staged photo is sent to Cloudinary and attached to the
   // brand-new product. The admin never has to leave this screen or come
-  // back later to add photos — the existing Cloudinary
+  // back later to add photos â€” the existing Cloudinary
   // architecture/media actions are reused exactly as they are, just
   // called automatically right here instead of requiring a manual
   // second step. If a photo fails to upload, creation still succeeds
   // (the product itself is never lost over a photo problem) and the
-  // admin lands on the edit page with a clear, specific warning — where
+  // admin lands on the edit page with a clear, specific warning â€” where
   // the real ImageUploader is available to retry that exact photo.
   async function onSubmit(data: ProductInput) {
     setSaving(true);
@@ -165,22 +181,22 @@ export function ProductForm({
     try {
       if (productId) {
         await updateProduct(productId, data);
-        setDirty(false); // saved — no longer unsaved, don't prompt on the refresh below
+        setDirty(false); // saved â€” no longer unsaved, don't prompt on the refresh below
         router.refresh();
         setSaveResult({ kind: "updated" });
       } else {
         const created = await createProduct(data);
-        setDirty(false); // saved — don't prompt on the redirect to the new product's edit page
+        setDirty(false); // saved â€” don't prompt on the redirect to the new product's edit page
 
-        // Build the full upload queue up front — general product photos
-        // AND staged variant photos — so the progress indicator reflects
+        // Build the full upload queue up front â€” general product photos
+        // AND staged variant photos â€” so the progress indicator reflects
         // everything that's about to happen, not just the general
         // gallery. One queue entry per COLOUR (not per size variant
-        // sharing that colour): uploadVariantImage takes the whole
-        // variantIds group and does one physical Cloudinary upload,
-        // fanned out to one ProductImage row per variant — see that
-        // action's comment. Queuing one entry per variant here would
-        // reproduce the exact duplicate-upload bug this fixes.
+        // sharing that colour): the file uploads directly to Cloudinary
+        // once, then replaceVariantImage fans the returned asset out to
+        // one ProductImage row per real variant ID sharing that colour.
+        // Queuing one entry per size variant would duplicate the physical
+        // upload, so the queue deliberately stays one entry per colour.
         type QueuedUpload = { kind: "product" } | { kind: "variant"; variantIds: string[] };
         const uploadQueue: { file: File; target: QueuedUpload }[] = [];
 
@@ -189,7 +205,7 @@ export function ProductForm({
         }
         for (const [color, staged] of Object.entries(stagedVariantImages)) {
           // Structured `color` is the primary match (see createProduct's
-          // return shape in lib/actions/products.ts) — the `value`-based
+          // return shape in lib/actions/products.ts) â€” the `value`-based
           // check only still applies to a legacy/Material row without one.
           const variantIdsForColor = created.variants
             .filter(
@@ -206,32 +222,43 @@ export function ProductForm({
           setUploadStatus({ done: 0, total: uploadQueue.length });
           for (let i = 0; i < uploadQueue.length; i++) {
             try {
-              const base64 = await fileToBase64(uploadQueue[i].file);
+              const uploaded = await uploadFileDirectToCloudinary(uploadQueue[i].file);
               const target = uploadQueue[i].target;
+
               if (target.kind === "product") {
-                await uploadProductImage({ productId: created.id, fileBase64: base64 });
+                const result = await attachProductImage({
+                  productId: created.id,
+                  cloudinaryId: uploaded.cloudinaryId,
+                });
+                if (!result.ok) throw new Error(result.error);
               } else {
-                await uploadVariantImage({ variantIds: target.variantIds, productId: created.id, fileBase64: base64 });
+                const result = await replaceVariantImage({
+                  variantIds: target.variantIds,
+                  productId: created.id,
+                  cloudinaryId: uploaded.cloudinaryId,
+                });
+                if (!result.ok) throw new Error(result.error);
               }
-            } catch {
+            } catch (err) {
+              console.error("[product-create-photo] Upload failed", err);
               failedCount++;
             }
             setUploadStatus({ done: i + 1, total: uploadQueue.length });
           }
         }
 
-        // The success/partial-failure dialog takes over from here — no
+        // The success/partial-failure dialog takes over from here â€” no
         // automatic redirect. "Edit Product"/"Review Photos" navigates
         // to the edit page (with the existing ?photosFailed=N banner
         // still intact for a partial failure); "Return to Products"
         // goes to the list. Either way the admin decides, once they've
-        // actually seen the result — this must not fire until this
+        // actually seen the result â€” this must not fire until this
         // exact point, after every staged photo has been uploaded (or
         // failed) to Cloudinary.
         setSaveResult({ kind: "created", productId: created.id, failedPhotoCount: failedCount });
       }
     } catch (err) {
-      setServerError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+      setServerError(friendlySaveError(err));
       setStep("form"); // a save failure (e.g. Best Sellers cap, slug taken) needs the admin back in the editable form to fix it
     } finally {
       setSaving(false);
@@ -273,7 +300,7 @@ export function ProductForm({
               );
             } else {
               setSaveResult(null);
-              setStep("form"); // "Continue Editing" — back to the editable form, not the read-only preview
+              setStep("form"); // "Continue Editing" â€” back to the editable form, not the read-only preview
             }
           }}
           onReturnToProducts={() => router.push("/admin/products")}
@@ -297,7 +324,7 @@ export function ProductForm({
           <div className="bg-red-50 text-red-700 text-sm font-body rounded-xl px-4 py-3">{serverError}</div>
         )}
 
-        {/* Category comes FIRST — it decides how the Variants section below
+        {/* Category comes FIRST â€” it decides how the Variants section below
             behaves (Bags = color only, Shoes/Slippers = color/size), so the
             admin picks it before anything variant-related can make sense. */}
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
@@ -333,18 +360,18 @@ export function ProductForm({
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
           <h2 className="font-display text-lg text-ink">Pricing</h2>
           <p className="text-xs text-ink/40 font-body -mt-2">
-            One price for the whole product — every colour/size (if any) sells at this same price.
+            One price for the whole product â€” every colour/size (if any) sells at this same price.
           </p>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="font-body text-sm text-ink/70">Selling Price (₦)</label>
+              <label className="font-body text-sm text-ink/70">Selling Price (â‚¦)</label>
               <input type="number" step="0.01" {...register("price")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
               {errors.price && <p className="text-xs text-red-600 mt-1">{errors.price.message}</p>}
             </div>
 
             {canSeeFinancials ? (
               <div>
-                <label className="font-body text-sm text-ink/70">Cost Price (₦)</label>
+                <label className="font-body text-sm text-ink/70">Cost Price (â‚¦)</label>
                 <input type="number" step="0.01" {...register("costPrice")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
               </div>
             ) : (
@@ -360,7 +387,7 @@ export function ProductForm({
               <label className="font-body text-sm text-ink/70">Discount (%)</label>
               <input type="number" step="0.01" {...register("discount")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
               <p className="text-[11px] text-ink/40 font-body mt-1">
-                Customers will see the discounted price automatically — no need to change the price above.
+                Customers will see the discounted price automatically â€” no need to change the price above.
               </p>
             </div>
             <div>
@@ -385,7 +412,7 @@ export function ProductForm({
           </div>
         </section>
 
-        {/* Variants — category-aware (Bags = colour only, Shoes/Slippers = colour and/or size). */}
+        {/* Variants â€” category-aware (Bags = colour only, Shoes/Slippers = colour and/or size). */}
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
           <VariantsSection
             productId={productId}
@@ -403,11 +430,11 @@ export function ProductForm({
           )}
         </section>
 
-        {/* SEO — standalone, both fields optional, kept because it genuinely helps the admin (search visibility), not decorative */}
+        {/* SEO â€” standalone, both fields optional, kept because it genuinely helps the admin (search visibility), not decorative */}
         <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6 space-y-4">
           <h2 className="font-display text-lg text-ink">Search Visibility</h2>
           <p className="text-xs text-ink/40 font-body -mt-2">
-            Optional — helps customers find this product through Google search.
+            Optional â€” helps customers find this product through Google search.
           </p>
           <div>
             <label className="font-body text-sm text-ink/70">Search Title</label>
@@ -427,7 +454,7 @@ export function ProductForm({
         </div>
       </form>
 
-      {/* Sticky mobile action bar — always visible, no scrolling required. */}
+      {/* Sticky mobile action bar â€” always visible, no scrolling required. */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-cream p-3">
         <button
           type="button"
