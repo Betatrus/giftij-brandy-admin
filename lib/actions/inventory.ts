@@ -953,6 +953,7 @@ export async function getLowStockCount() {
     prisma.inventory.findMany({
       select: {
         currentStock: true,
+        reservedStock: true,
         soldStock: true,
         lowStockThreshold: true,
       },
@@ -968,6 +969,7 @@ export async function getLowStockCount() {
 
         select: {
           currentStock: true,
+          reservedStock: true,
           soldStock: true,
           lowStockThreshold: true,
         },
