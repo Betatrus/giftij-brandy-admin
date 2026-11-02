@@ -59,6 +59,7 @@ async function requireSession() {
 
 type StockRecord = {
   currentStock: number;
+  reservedStock: number;
   soldStock: number;
   damagedStock: number;
   returnedStock: number;
@@ -66,20 +67,26 @@ type StockRecord = {
 
 function assertEnoughStock(
   currentStock: number,
+  reservedStock: number,
   changeType:
     | AdjustStockInput["changeType"]
     | AdjustVariantStockInput["changeType"],
   quantity: number,
 ) {
+  const availableToAdjust = Math.max(0, currentStock - reservedStock);
+
   if (
-    (changeType === "DECREASE" ||
-      changeType === "DAMAGE") &&
-    quantity > currentStock
+    (changeType === "DECREASE" || changeType === "DAMAGE") &&
+    quantity > availableToAdjust
   ) {
     throw new Error(
-      `Only ${currentStock} unit${
-        currentStock === 1 ? "" : "s"
-      } are currently in stock.`,
+      `Only ${availableToAdjust} unreserved unit${availableToAdjust === 1 ? "" : "s"} are available to adjust. ${reservedStock} unit${reservedStock === 1 ? " is" : "s are"} reserved for active checkouts.`,
+    );
+  }
+
+  if (changeType === "ADJUST" && quantity < reservedStock) {
+    throw new Error(
+      `The new stock level cannot be below the ${reservedStock} units already reserved for checkout.`,
     );
   }
 }
@@ -253,6 +260,7 @@ export async function adjustStock(
 
   assertEnoughStock(
     inventory.currentStock,
+    inventory.reservedStock,
     parsed.changeType,
     parsed.quantity,
   );
@@ -425,6 +433,7 @@ export async function adjustVariantStock(
 
   assertEnoughStock(
     variant.currentStock,
+    variant.reservedStock,
     parsed.changeType,
     parsed.quantity,
   );
