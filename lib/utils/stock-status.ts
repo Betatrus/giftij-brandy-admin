@@ -35,20 +35,17 @@ export function getStockStatus(params: {
   soldStock: number;
   lowStockThreshold: number;
 }): StockStatus {
-  const { currentStock, soldStock, lowStockThreshold } = params;
+  const { currentStock, soldStock } = params;
 
   if (currentStock <= 0) return "OUT_OF_STOCK";
 
-  const everAvailable = currentStock + soldStock;
-  const percentSold = everAvailable > 0 ? soldStock / everAvailable : 0;
+  // Sell-through is measured against stock that was actually available
+  // (on-hand plus sold). Reservations are excluded because they are not sales.
+  const totalSellable = currentStock + soldStock;
+  const percentSold = totalSellable > 0 ? soldStock / totalSellable : 0;
 
-  // Absolute floors, scaled off the admin's own threshold — never less
-  // than 1 unit, so a threshold of 0 can't produce a nonsensical floor.
-  const veryLowFloor = Math.max(1, Math.ceil(lowStockThreshold / 2));
-  const lowFloor = Math.max(veryLowFloor, lowStockThreshold);
-
-  if (currentStock <= veryLowFloor || percentSold >= 0.9) return "VERY_LOW_STOCK";
-  if (currentStock <= lowFloor || percentSold >= 0.7) return "LOW_STOCK";
+  if (percentSold >= 0.9) return "VERY_LOW_STOCK";
+  if (percentSold >= 0.8) return "LOW_STOCK";
   return "IN_STOCK";
 }
 
