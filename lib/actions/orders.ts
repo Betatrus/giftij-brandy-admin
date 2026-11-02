@@ -482,126 +482,31 @@ export async function cancelOrder(
     "CANCELLED"
   );
 
-  await prisma.$transaction(
-    async (tx) => {
-      for (const item of existing.items) {
-        if (item.variantId) {
-          const variant =
-            await tx.productVariant.findUniqueOrThrow(
-              {
-                where: {
-                  id: item.variantId,
-                },
-              }
-            );
+  await prisma.$transaction(async (tx) => {
+    // Cancellation and physical restocking are separate operations.
+    // Do not increase available stock until an item is physically received,
+    // inspected, and manually restocked by an administrator.
+    await tx.order.update({
+      where: { id },
+      data: { status: "CANCELLED" },
+    });
 
-          await tx.productVariant.update({
-            where: {
-              id: item.variantId,
-            },
+    await tx.orderNote.create({
+      data: {
+        orderId: id,
+        note:
+          "Order cancelled by an administrator. Inventory was not automatically restored; restock only after physical receipt and inspection.",
+        createdBy: session.user.id,
+      },
+    });
 
-            data: {
-              currentStock:
-                variant.currentStock +
-                item.quantity,
-
-              soldStock: Math.max(
-                0,
-                variant.soldStock -
-                  item.quantity
-              ),
-
-              returnedStock:
-                variant.returnedStock +
-                item.quantity,
-            },
-          });
-
-          await tx.variantInventoryLog.create({
-            data: {
-              variantId:
-                item.variantId,
-
-              changeType:
-                "RETURN",
-
-              quantity:
-                item.quantity,
-
-              reason:
-                "[ORDER_CANCELLED] Restocked on cancellation",
-            },
-          });
-        } else {
-          const inventory =
-            await tx.inventory.findUniqueOrThrow(
-              {
-                where: {
-                  productId:
-                    item.productId,
-                },
-              }
-            );
-
-          await tx.inventory.update({
-            where: {
-              productId:
-                item.productId,
-            },
-
-            data: {
-              currentStock:
-                inventory.currentStock +
-                item.quantity,
-
-              soldStock: Math.max(
-                0,
-                inventory.soldStock -
-                  item.quantity
-              ),
-
-              returnedStock:
-                inventory.returnedStock +
-                item.quantity,
-            },
-          });
-
-          await tx.inventoryLog.create({
-            data: {
-              inventoryId:
-                inventory.id,
-
-              changeType:
-                "RETURN",
-
-              quantity:
-                item.quantity,
-
-              reason:
-                "[ORDER_CANCELLED] Restocked on cancellation",
-            },
-          });
-        }
-      }
-
-      await tx.order.update({
-        where: {
-          id,
-        },
-
-        data: {
-          status: "CANCELLED",
-        },
-      });
-
-      await tx.orderEvent.create({
-        data: {
-          orderId: id,
-          label: "Order Cancelled",
-        },
-      });
-    }
-  );
+    await tx.orderEvent.create({
+      data: {
+        orderId: id,
+        label: "Order Cancelled - Inventory Not Restocked",
+      },
+    });
+  });
 
   await logActivity({
     userId: session.user.id,
@@ -610,7 +515,7 @@ export async function cancelOrder(
     metadata: {
       from,
       to: "CANCELLED",
-      restocked: true,
+      restocked: false,
     },
   });
 
