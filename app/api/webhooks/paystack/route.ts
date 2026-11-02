@@ -40,6 +40,7 @@ type PaystackWebhookEvent = {
 
     metadata?: {
       reservationId?: string;
+      expectedAmountKobo?: number;
 
       cart?: {
         productId: string;
@@ -99,6 +100,40 @@ function verifySignature(
     expectedBuffer,
     receivedBuffer,
   );
+}
+
+async function verifySuccessfulTransaction(
+  data: PaystackWebhookEvent["data"],
+): Promise<void> {
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+  const expectedAmount = data.metadata?.expectedAmountKobo;
+
+  if (!secret || !Number.isSafeInteger(expectedAmount) || Number(expectedAmount) <= 0) {
+    throw new Error("Missing server-calculated expected payment amount.");
+  }
+
+  const response = await fetch(
+    `https://api.paystack.co/transaction/verify/${encodeURIComponent(data.reference)}`,
+    {
+      headers: { Authorization: `Bearer ${secret}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | { status?: boolean; data?: { reference?: string; status?: string; amount?: number; currency?: string } }
+    | null;
+  const verified = payload?.data;
+  const expected = Number(expectedAmount);
+
+  if (
+    !response.ok || payload?.status !== true || verified?.status !== "success" ||
+    verified.reference !== data.reference || verified.amount !== expected ||
+    data.amount !== expected || verified.currency !== "NGN" ||
+    (data.currency ?? "NGN") !== "NGN"
+  ) {
+    throw new Error("Paystack transaction verification did not match this checkout.");
+  }
 }
 
 function parseCartFromMetadata(
@@ -355,6 +390,9 @@ export async function POST(
 async function handleChargeSuccess(
   data: PaystackWebhookEvent["data"],
 ) {
+  // Verify directly with Paystack before making customer, order, or stock writes.
+  await verifySuccessfulTransaction(data);
+
   /**
    * Paystack may retry the same webhook.
    *
@@ -511,6 +549,16 @@ async function handleChargeSuccess(
   const order =
     await prisma.$transaction(
       async (tx) => {
+        // Serialize a payment reference across all serverless instances.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))`;
+
+        const duplicate = await tx.order.findFirst({
+          where: { paymentReference: data.reference },
+        });
+        if (duplicate) {
+          return { order: duplicate, usedReservation: false, alreadyProcessed: true };
+        }
+
         /**
          * NEW RESERVATION PATH
          *
@@ -658,14 +706,16 @@ async function handleChargeSuccess(
         }
 
         return {
-          order:
-            created,
-
-          usedReservation:
-            reservationResult.consumed,
+          order: created,
+          usedReservation: reservationResult.consumed,
+          alreadyProcessed: false,
         };
       },
     );
+
+  if (order.alreadyProcessed) {
+    return;
+  }
 
   await prisma.customer.update(
     {
