@@ -194,7 +194,7 @@ export function OrderDetail({
       setError(
         err instanceof Error
           ? err.message
-          : "Failed to cancel order."
+          : "Failed to request cancellation review."
       );
     } finally {
       setIsPending(false);
@@ -343,7 +343,7 @@ export function OrderDetail({
               }
               className="rounded-xl border border-red-200 text-red-600 font-body text-sm px-4 py-2 disabled:opacity-60"
             >
-              Cancel Order
+              Request Cancellation Review
             </button>
           )}
         </div>
@@ -558,9 +558,9 @@ export function OrderDetail({
 
       <ConfirmDialog
         open={confirmCancel}
-        title="Cancel this order?"
-        description="This restocks every item on the order back into inventory. This cannot be undone."
-        confirmLabel="Cancel Order"
+        title="Request cancellation review?"
+        description="This sends the order for admin review. The order will not be cancelled, refunded, or restocked until those actions are separately approved."
+        confirmLabel="Request Review"
         danger
         onConfirm={
           handleCancel
