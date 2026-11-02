@@ -73,7 +73,7 @@ function assertEnoughStock(
     | AdjustVariantStockInput["changeType"],
   quantity: number,
 ) {
-  const availableToAdjust = Math.max(0, currentStock - reservedStock);
+  const availableToAdjust = currentStock;
 
   if (
     (changeType === "DECREASE" || changeType === "DAMAGE") &&
@@ -128,8 +128,9 @@ function computeStockDelta(
       break;
 
     case "ADJUST":
+      // Admin enters total physical stock; active reservations remain reserved.
       data.currentStock =
-        quantity;
+        quantity - current.reservedStock;
       break;
 
     case "DAMAGE":
