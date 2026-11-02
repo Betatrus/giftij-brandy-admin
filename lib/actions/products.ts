@@ -693,7 +693,7 @@ export async function listProducts(params: {
         inventory: true,
         variants: {
           where: { status: { not: "ARCHIVED" } },
-          select: { id: true, currentStock: true, soldStock: true, lowStockThreshold: true },
+          select: { id: true, currentStock: true, reservedStock: true, soldStock: true, lowStockThreshold: true },
         },
         images: { orderBy: { sortOrder: "asc" }, take: 1 },
         categories: { select: { id: true, name: true, slug: true } },
