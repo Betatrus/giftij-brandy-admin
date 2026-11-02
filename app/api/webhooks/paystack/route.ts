@@ -11,7 +11,7 @@ import {
   recordCustomerEvent,
 } from "@/lib/customers/identity";
 import {
-  deductStockForOrder,
+  allocateStockForPaidOrderAllOrNothing,
   type CartLine,
 } from "@/lib/orders/stock";
 import {
@@ -606,27 +606,15 @@ async function handleChargeSuccess(
          * In those cases we preserve the successful paid order and fall back
          * to the old atomic deduction logic.
          */
-        let fallbackShortfalls:
-          {
-            productId: string;
-            variantId?:
-              | string
-              | null;
-            requested: number;
-            deducted: number;
-          }[] = [];
+        let stockUnavailable = false;
 
-        if (
-          !reservationResult.consumed
-        ) {
-          const fallback =
-            await deductStockForOrder(
+        if (!reservationResult.consumed) {
+          stockUnavailable = !(
+            await allocateStockForPaidOrderAllOrNothing(
               tx,
               cartLines,
-            );
-
-          fallbackShortfalls =
-            fallback.shortfalls;
+            )
+          );
         }
 
         const created =
@@ -639,7 +627,7 @@ async function handleChargeSuccess(
                   customer.id,
 
                 status:
-                  "PENDING",
+                  stockUnavailable ? "PAID" : "PENDING",
 
                 shippingAddress:
                   (data.metadata
@@ -689,37 +677,15 @@ async function handleChargeSuccess(
             },
           );
 
-        if (
-          fallbackShortfalls.length >
-          0
-        ) {
-          await tx.orderNote.create(
-            {
-              data: {
-                orderId:
-                  created.id,
-
-                note:
-                  `Stock shortfall at fulfillment: ${fallbackShortfalls
-                    .map(
-                      (
-                        shortfall,
-                      ) =>
-                        `${shortfall.productId}${
-                          shortfall.variantId
-                            ? `/${shortfall.variantId}`
-                            : ""
-                        } requested ${shortfall.requested}, only ${shortfall.deducted} available`,
-                    )
-                    .join(
-                      "; ",
-                    )}`,
-
-                createdBy:
-                  "system:paystack_webhook",
-              },
+        if (stockUnavailable) {
+          await tx.orderNote.create({
+            data: {
+              orderId: created.id,
+              note:
+                "PAID - STOCK UNAVAILABLE: Paystack confirmed payment after the checkout reservation was no longer active. No stock was deducted. Admin resolution/refund review is required.",
+              createdBy: "system:paystack_webhook",
             },
-          );
+          });
         }
 
         return {
