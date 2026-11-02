@@ -463,16 +463,28 @@ export async function cancelOrder(
 
   const existing = await prisma.order.findUniqueOrThrow({
     where: { id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, cancellationReviewStatus: true },
   });
 
   if (existing.status === "CANCELLED") {
     throw new Error("This order is already cancelled.");
   }
+  if (existing.cancellationReviewStatus === "REQUESTED") {
+    throw new Error("A cancellation review is already pending for this order.");
+  }
 
   // This action only starts a review. It must never cancel, refund, or
   // restore inventory by itself; those are separate approved operations.
   await prisma.$transaction(async (tx) => {
+    await tx.order.update({
+      where: { id },
+      data: {
+        cancellationReviewStatus: "REQUESTED",
+        cancellationRequestedAt: new Date(),
+        cancellationRequestedBy: session.user.id,
+      },
+    });
+
     await tx.orderNote.create({
       data: {
         orderId: id,
