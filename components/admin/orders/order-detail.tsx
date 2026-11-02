@@ -36,6 +36,7 @@ type OrderDetailData = {
   shippingAddress: unknown;
   paymentReference: string | null;
   stockUnavailable: boolean;
+  cancellationReviewStatus: "NONE" | "REQUESTED" | "APPROVED" | "REJECTED";
 
   items: {
     id: string;
@@ -313,6 +314,9 @@ export function OrderDetail({
                 : order.adminStatus
             }
           />
+          {order.cancellationReviewStatus === "REQUESTED" && (
+            <Badge label="Cancellation Review Pending" tone="LOW_STOCK" />
+          )}
         </div>
 
         {markingViewed && (
