@@ -12,7 +12,7 @@ const INVENTORY_NOTIFICATION_ACTIONS = [
   "INVENTORY_CUSTOMER_RETURN",
 ] as const;
 
-const ORDER_REMINDER_DAYS = 7;
+const ORDER_REMINDER_DAYS = 6;
 
 function metadataRecord(
   metadata: unknown,
