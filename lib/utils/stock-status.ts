@@ -33,15 +33,17 @@ export const STOCK_STATUS_LABELS: Record<StockStatus, string> = {
 export function getStockStatus(params: {
   currentStock: number;
   soldStock: number;
+  reservedStock?: number;
   lowStockThreshold: number;
 }): StockStatus {
-  const { currentStock, soldStock } = params;
+  const { currentStock, soldStock, reservedStock = 0 } = params;
 
   if (currentStock <= 0) return "OUT_OF_STOCK";
 
-  // Sell-through is measured against stock that was actually available
-  // (on-hand plus sold). Reservations are excluded because they are not sales.
-  const totalSellable = currentStock + soldStock;
+  // Reservations are not sales, but remain part of the original stock pool.
+  // Include them in the denominator so reserving stock cannot inflate the
+  // sell-through percentage or trigger an early low-stock warning.
+  const totalSellable = currentStock + reservedStock + soldStock;
   const percentSold = totalSellable > 0 ? soldStock / totalSellable : 0;
 
   if (percentSold >= 0.9) return "VERY_LOW_STOCK";
