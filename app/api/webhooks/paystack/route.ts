@@ -53,6 +53,7 @@ type PaystackWebhookEvent = {
         productId: string;
         variantId?: string;
         quantity: number;
+        unitPrice?: number;
       }[];
 
       shippingAddress?: Record<
@@ -531,18 +532,21 @@ async function handleChargeSuccess(
       );
     }
 
-    const effectiveUnitPrice =
-      computeEffectivePrice(
-        Number(
-          product.price,
-        ),
+    const priceSnapshot = data.metadata?.cart?.find(
+      (snapshot) =>
+        snapshot.productId === line.productId &&
+        (snapshot.variantId ?? null) === (line.variantId ?? null),
+    )?.unitPrice;
 
-        product.discount
-          ? Number(
-              product.discount,
-            )
-          : 0,
-      );
+    const effectiveUnitPrice =
+      typeof priceSnapshot === "number" &&
+      Number.isFinite(priceSnapshot) &&
+      priceSnapshot >= 0
+        ? priceSnapshot
+        : computeEffectivePrice(
+            Number(product.price),
+            product.discount ? Number(product.discount) : 0,
+          );
 
     effectiveUnitPriceByLine.set(
       `${line.productId}:${line.variantId ?? ""}`,
