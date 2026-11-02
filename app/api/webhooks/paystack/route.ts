@@ -23,6 +23,13 @@ import { generateUniqueValueLike } from "@/lib/utils/slug";
 
 export const runtime = "nodejs";
 
+class InvalidVerifiedPaymentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidVerifiedPaymentError";
+  }
+}
+
 type PaystackWebhookEvent = {
   event: string;
 
@@ -132,7 +139,9 @@ async function verifySuccessfulTransaction(
     data.amount !== expected || verified.currency !== "NGN" ||
     (data.currency ?? "NGN") !== "NGN"
   ) {
-    throw new Error("Paystack transaction verification did not match this checkout.");
+    throw new InvalidVerifiedPaymentError(
+      "Paystack transaction verification did not match this checkout.",
+    );
   }
 }
 
@@ -375,6 +384,14 @@ export async function POST(
             ?.reference,
       },
     });
+
+    // A verified-but-mismatched payment is not retryable. Transient failures
+    // (Paystack/network/database errors) return 500 so Paystack can retry.
+    if (err instanceof InvalidVerifiedPaymentError) {
+      return NextResponse.json({ received: true, ignored: true }, { status: 200 });
+    }
+
+    return NextResponse.json({ received: false }, { status: 500 });
   }
 
   return NextResponse.json(
