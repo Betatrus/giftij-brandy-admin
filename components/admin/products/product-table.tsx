@@ -21,8 +21,8 @@ type ProductRow = {
   status: string;
   price: number | null;
   images: { url: string }[];
-  inventory: { currentStock: number; soldStock: number; lowStockThreshold: number } | null;
-  variants: { id: string; currentStock: number; soldStock: number; lowStockThreshold: number }[];
+  inventory: { currentStock: number; reservedStock: number; soldStock: number; lowStockThreshold: number } | null;
+  variants: { id: string; currentStock: number; reservedStock: number; soldStock: number; lowStockThreshold: number }[];
   featuredFlags: string[];
 };
 
