@@ -364,6 +364,7 @@ model Order {
   customer        Customer    @relation(fields: [customerId], references: [id])
   items           OrderItem[]
   status          OrderStatus @default(PENDING)
+  stockUnavailable Boolean    @default(false)
   shippingAddress Json
   paymentReference String?     @unique
   trackingNumber  String?
