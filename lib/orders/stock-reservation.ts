@@ -92,9 +92,17 @@ function normalizeCartLines(
     });
   }
 
-  return Array.from(
-    grouped.values(),
-  );
+  // Stable ordering makes concurrent multi-item reservations acquire
+  // inventory rows in the same order, reducing PostgreSQL deadlock risk.
+  return Array.from(grouped.values()).sort((a, b) => {
+    const aKey = a.variantId
+      ? `variant:${a.variantId}`
+      : `product:${a.productId}`;
+    const bKey = b.variantId
+      ? `variant:${b.variantId}`
+      : `product:${b.productId}`;
+    return aKey.localeCompare(bKey);
+  });
 }
 
 /**
