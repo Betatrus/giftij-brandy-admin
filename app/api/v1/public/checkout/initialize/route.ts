@@ -229,6 +229,9 @@ export async function POST(
             metadata: {
               reservationId,
 
+              // Server-calculated amount in kobo; webhook uses this for verification.
+              expectedAmountKobo: amountKobo,
+
               cart:
                 resolved.map(
                   (line) => ({
