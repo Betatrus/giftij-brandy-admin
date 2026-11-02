@@ -629,6 +629,7 @@ export async function consumeCheckoutReservation(
           id: true,
           status: true,
           cart: true,
+          expiresAt: true,
         },
       },
     );
@@ -664,6 +665,64 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart:
         lines,
+    };
+  }
+
+  /**
+   * Enforce the seven-minute deadline even when the scheduled/opportunistic
+   * cleanup has not run yet. A late successful payment is handled by the
+   * webhook's all-or-nothing paid-order allocation fallback.
+   */
+  if (reservation.expiresAt <= new Date()) {
+    const expiredClaim = await tx.checkoutReservation.updateMany({
+      where: {
+        id: reservation.id,
+        status: "ACTIVE",
+      },
+      data: {
+        status: "RELEASED",
+        releasedAt: new Date(),
+      },
+    });
+
+    if (expiredClaim.count === 1) {
+      for (const line of lines) {
+        if (line.variantId) {
+          const restored = await tx.productVariant.updateMany({
+            where: {
+              id: line.variantId,
+              productId: line.productId,
+              reservedStock: { gte: line.quantity },
+            },
+            data: {
+              reservedStock: { decrement: line.quantity },
+              currentStock: { increment: line.quantity },
+            },
+          });
+          if (restored.count !== 1) {
+            throw new Error(`Unable to release expired reservation for variant ${line.variantId}.`);
+          }
+        } else {
+          const restored = await tx.inventory.updateMany({
+            where: {
+              productId: line.productId,
+              reservedStock: { gte: line.quantity },
+            },
+            data: {
+              reservedStock: { decrement: line.quantity },
+              currentStock: { increment: line.quantity },
+            },
+          });
+          if (restored.count !== 1) {
+            throw new Error(`Unable to release expired reservation for product ${line.productId}.`);
+          }
+        }
+      }
+    }
+
+    return {
+      consumed: false,
+      cart: lines,
     };
   }
 
