@@ -539,11 +539,11 @@ export async function resolveCancellationReview(
   }
 
   await prisma.$transaction(async (tx) => {
-    const where = {
+    const where: Prisma.OrderWhereInput = {
       id,
-      cancellationReviewStatus: "REQUESTED" as const,
+      cancellationReviewStatus: "REQUESTED",
       ...(decision === "APPROVE"
-        ? { status: { in: ["PENDING", "PROCESSING"] as const } }
+        ? { status: { in: ["PENDING", "PROCESSING"] } }
         : {}),
     };
 
