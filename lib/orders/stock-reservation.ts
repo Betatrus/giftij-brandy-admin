@@ -17,7 +17,7 @@ import type { CartLine } from "@/lib/orders/stock";
  * Successful payment consumes the reservation.
  */
 export const CHECKOUT_RESERVATION_TTL_MS =
-  15 * 60 * 1000;
+  7 * 60 * 1000;
 
 type TxClient =
   | Prisma.TransactionClient
