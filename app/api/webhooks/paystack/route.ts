@@ -630,8 +630,8 @@ async function handleChargeSuccess(
                 customerId:
                   customer.id,
 
-                status:
-                  stockUnavailable ? "PAID" : "PENDING",
+                status: "PENDING",
+                stockUnavailable,
 
                 shippingAddress:
                   (data.metadata
