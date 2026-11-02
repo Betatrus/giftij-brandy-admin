@@ -39,9 +39,19 @@ export async function GET(req: NextRequest) {
     });
 
     if (order) {
+      if (order.status === "PAID") {
+        return withCors(
+          ok({
+            status: "stock_unavailable" as const,
+            orderNumber: order.orderNumber,
+          }),
+          origin,
+        );
+      }
+
       return withCors(
         ok({ status: "confirmed" as const, orderNumber: order.orderNumber }),
-        origin
+        origin,
       );
     }
 
