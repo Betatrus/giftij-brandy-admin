@@ -35,11 +35,11 @@ export async function GET(req: NextRequest) {
 
     const order = await prisma.order.findFirst({
       where: { paymentReference: reference },
-      select: { orderNumber: true, status: true, createdAt: true },
+      select: { orderNumber: true, status: true, stockUnavailable: true, createdAt: true },
     });
 
     if (order) {
-      if (order.status === "PAID") {
+      if (order.stockUnavailable) {
         return withCors(
           ok({
             status: "stock_unavailable" as const,
