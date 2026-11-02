@@ -35,6 +35,7 @@ type OrderDetailData = {
 
   shippingAddress: unknown;
   paymentReference: string | null;
+  stockUnavailable: boolean;
 
   items: {
     id: string;
@@ -269,6 +270,17 @@ export function OrderDetail({
       {error && (
         <div className="bg-red-50 text-red-700 text-sm font-body rounded-xl px-4 py-3">
           {error}
+        </div>
+      )}
+
+      {order.stockUnavailable && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+          <p className="font-body text-sm font-semibold">Payment received — stock unavailable</p>
+          <p className="font-body text-sm mt-1">
+            Paystack confirmed this payment, but the full order quantity could not be allocated.
+            No inventory was deducted. Review availability and contact the customer about fulfilment
+            or a separately approved refund.
+          </p>
         </div>
       )}
 
