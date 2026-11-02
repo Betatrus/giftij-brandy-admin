@@ -596,6 +596,38 @@ export async function archiveProduct(id: string) {
   revalidateTag("products");
 }
 
+/** Switch product availability without bypassing the product lifecycle. */
+export async function setProductAvailability(id: string, active: boolean) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "products:write")) {
+    throw new Error("FORBIDDEN");
+  }
+
+  const existing = await prisma.product.findUniqueOrThrow({
+    where: { id },
+    select: { status: true },
+  });
+  const nextStatus: ProductStatus = active ? "ACTIVE" : "ARCHIVED";
+  assertValidProductTransition(existing.status, nextStatus);
+
+  if (existing.status !== nextStatus) {
+    await prisma.product.update({
+      where: { id },
+      data: { status: nextStatus },
+    });
+
+    await logActivity({
+      userId: session.user.id,
+      action: active ? "PRODUCT_ACTIVATE" : "PRODUCT_ARCHIVE",
+      resource: `Product:${id}`,
+      metadata: { previousStatus: existing.status, nextStatus },
+    });
+  }
+
+  revalidatePath("/admin/products");
+  revalidateTag("products");
+}
+
 /** Hard delete Ã¢â‚¬â€ only allowed if the product has never been ordered. */
 export async function deleteProduct(id: string) {
   const session = await requireSession();
