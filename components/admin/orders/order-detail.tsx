@@ -346,7 +346,8 @@ export function OrderDetail({
           {(order.adminStatus ===
             "PENDING" ||
             order.adminStatus ===
-              "PROCESSING") && (
+              "PROCESSING") &&
+            order.cancellationReviewStatus !== "REQUESTED" && (
             <button
               onClick={() =>
                 setConfirmCancel(
