@@ -518,6 +518,80 @@ export async function cancelOrder(
   revalidateTag("orders");
 }
 
+/**
+ * Resolve a pending cancellation review. Approval changes fulfilment status
+ * only; it never issues a payment refund or restores inventory.
+ */
+export async function resolveCancellationReview(
+  id: string,
+  decision: "APPROVE" | "REJECT",
+  reason: string
+) {
+  const session = await requireSession();
+
+  if (!hasPermission(session.user.role, "orders:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to resolve cancellation reviews");
+  }
+
+  const cleanReason = reason.trim();
+  if (cleanReason.length < 3) {
+    throw new Error("Please provide a reason of at least 3 characters.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const where = {
+      id,
+      cancellationReviewStatus: "REQUESTED" as const,
+      ...(decision === "APPROVE"
+        ? { status: { in: ["PENDING", "PROCESSING"] as const } }
+        : {}),
+    };
+
+    const changed = await tx.order.updateMany({
+      where,
+      data: {
+        cancellationReviewStatus: decision === "APPROVE" ? "APPROVED" : "REJECTED",
+        ...(decision === "APPROVE" ? { status: "CANCELLED" as const } : {}),
+      },
+    });
+
+    if (changed.count !== 1) {
+      throw new Error("This cancellation review is no longer pending or the order can no longer be cancelled.");
+    }
+
+    await tx.orderNote.create({
+      data: {
+        orderId: id,
+        note: `CANCELLATION REVIEW ${decision === "APPROVE" ? "APPROVED" : "REJECTED"}: ${cleanReason}. No automatic refund or inventory restoration was performed.`,
+        createdBy: session.user.id,
+      },
+    });
+
+    await tx.orderEvent.create({
+      data: {
+        orderId: id,
+        label: decision === "APPROVE" ? "Cancellation Review Approved" : "Cancellation Review Rejected",
+      },
+    });
+  });
+
+  await logActivity({
+    userId: session.user.id,
+    action: decision === "APPROVE" ? "ORDER_CANCELLATION_REVIEW_APPROVED" : "ORDER_CANCELLATION_REVIEW_REJECTED",
+    resource: `Order:${id}`,
+    metadata: {
+      decision,
+      reason: cleanReason,
+      refundInitiated: false,
+      inventoryRestored: false,
+    },
+  });
+
+  revalidatePath("/admin/orders");
+  revalidatePath(`/admin/orders/${id}`);
+  revalidateTag("orders");
+}
+
 export async function addOrderNote(input: {
   orderId: string;
   note: string;
