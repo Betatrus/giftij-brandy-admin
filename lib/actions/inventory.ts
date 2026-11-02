@@ -798,12 +798,13 @@ export async function listInventory(
 
         variants,
 
+        // currentStock already excludes reserved units. Total physical
+        // on-hand is available currentStock plus reservedStock.
         totalStock: base
-          ? base.currentStock
+          ? base.currentStock + base.reservedStock
           : variants.reduce(
               (sum, v) =>
-                sum +
-                v.currentStock,
+                sum + v.currentStock + v.reservedStock,
               0,
             ),
 
