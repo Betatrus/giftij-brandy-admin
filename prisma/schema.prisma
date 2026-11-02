@@ -365,7 +365,7 @@ model Order {
   items           OrderItem[]
   status          OrderStatus @default(PENDING)
   shippingAddress Json
-  paymentReference String?
+  paymentReference String?     @unique
   trackingNumber  String?
 
   subtotal        Decimal     @db.Decimal(12, 2)
