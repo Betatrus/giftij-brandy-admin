@@ -345,6 +345,13 @@ model VariantInventoryLog {
 // ORDERS
 // ============================================================
 
+enum CancellationReviewStatus {
+  NONE
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
 enum OrderStatus {
   PENDING
   PAID
@@ -365,6 +372,9 @@ model Order {
   items           OrderItem[]
   status          OrderStatus @default(PENDING)
   stockUnavailable Boolean    @default(false)
+  cancellationReviewStatus CancellationReviewStatus @default(NONE)
+  cancellationRequestedAt DateTime?
+  cancellationRequestedBy String?
   shippingAddress Json
   paymentReference String?     @unique
   trackingNumber  String?
