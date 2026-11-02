@@ -405,6 +405,93 @@ async function deductRemainingInventoryStock(
 }
 
 /**
+ * All-or-nothing stock allocation for a successfully paid checkout whose
+ * temporary reservation has already expired. If any line is unavailable,
+ * earlier line updates are reversed inside the same transaction, so no
+ * partial quantity is ever consumed.
+ */
+export async function allocateStockForPaidOrderAllOrNothing(
+  tx: TxClient,
+  lines: CartLine[],
+): Promise<boolean> {
+  const applied: CartLine[] = [];
+
+  for (const line of lines) {
+    const result = line.variantId
+      ? await tryFullVariantDeduction(tx, line.variantId, line.quantity)
+      : await tryFullInventoryDeduction(tx, line.productId, line.quantity);
+
+    if (result.count !== 1) {
+      // The transaction still holds the row locks from successful updates.
+      // Reverse those exact updates before allowing the caller to commit.
+      for (const previous of applied.reverse()) {
+        if (previous.variantId) {
+          const restored = await tx.productVariant.updateMany({
+            where: {
+              id: previous.variantId,
+              soldStock: { gte: previous.quantity },
+            },
+            data: {
+              currentStock: { increment: previous.quantity },
+              soldStock: { decrement: previous.quantity },
+            },
+          });
+          if (restored.count !== 1) {
+            throw new Error("Could not reverse a partial variant allocation.");
+          }
+        } else {
+          const restored = await tx.inventory.updateMany({
+            where: {
+              productId: previous.productId,
+              soldStock: { gte: previous.quantity },
+            },
+            data: {
+              currentStock: { increment: previous.quantity },
+              soldStock: { decrement: previous.quantity },
+            },
+          });
+          if (restored.count !== 1) {
+            throw new Error("Could not reverse a partial inventory allocation.");
+          }
+        }
+      }
+      return false;
+    }
+
+    applied.push(line);
+  }
+
+  // Write movement logs only after every line has been allocated.
+  for (const line of applied) {
+    if (line.variantId) {
+      await tx.variantInventoryLog.create({
+        data: {
+          variantId: line.variantId,
+          changeType: "DECREASE",
+          quantity: line.quantity,
+          reason: "[ONLINE_SALE] Late Paystack payment allocation",
+        },
+      });
+    } else {
+      const inventory = await tx.inventory.findUniqueOrThrow({
+        where: { productId: line.productId },
+        select: { id: true },
+      });
+      await tx.inventoryLog.create({
+        data: {
+          inventoryId: inventory.id,
+          changeType: "DECREASE",
+          quantity: line.quantity,
+          reason: "[ONLINE_SALE] Late Paystack payment allocation",
+        },
+      });
+    }
+  }
+
+  return true;
+}
+
+/**
  * Final authoritative stock deduction for a successfully paid order.
  *
  * IMPORTANT:
