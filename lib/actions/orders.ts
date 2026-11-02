@@ -461,41 +461,23 @@ export async function cancelOrder(
     );
   }
 
-  const existing =
-    await prisma.order.findUniqueOrThrow({
-      where: {
-        id,
-      },
+  const existing = await prisma.order.findUniqueOrThrow({
+    where: { id },
+    select: { id: true, status: true },
+  });
 
-      include: {
-        items: true,
-      },
-    });
+  if (existing.status === "CANCELLED") {
+    throw new Error("This order is already cancelled.");
+  }
 
-  const from =
-    fromSchemaOrderStatus(
-      existing.status
-    );
-
-  assertValidOrderTransition(
-    from,
-    "CANCELLED"
-  );
-
+  // This action only starts a review. It must never cancel, refund, or
+  // restore inventory by itself; those are separate approved operations.
   await prisma.$transaction(async (tx) => {
-    // Cancellation and physical restocking are separate operations.
-    // Do not increase available stock until an item is physically received,
-    // inspected, and manually restocked by an administrator.
-    await tx.order.update({
-      where: { id },
-      data: { status: "CANCELLED" },
-    });
-
     await tx.orderNote.create({
       data: {
         orderId: id,
         note:
-          "Order cancelled by an administrator. Inventory was not automatically restored; restock only after physical receipt and inspection.",
+          "CANCELLATION REVIEW REQUESTED by an administrator. Order status, payment and inventory remain unchanged until an authorised reviewer decides the request.",
         createdBy: session.user.id,
       },
     });
@@ -503,34 +485,25 @@ export async function cancelOrder(
     await tx.orderEvent.create({
       data: {
         orderId: id,
-        label: "Order Cancelled - Inventory Not Restocked",
+        label: "Cancellation Review Requested",
       },
     });
   });
 
   await logActivity({
     userId: session.user.id,
-    action: "ORDER_STATUS_UPDATE",
+    action: "ORDER_CANCELLATION_REVIEW_REQUESTED",
     resource: `Order:${id}`,
     metadata: {
-      from,
-      to: "CANCELLED",
-      restocked: false,
+      orderStatusUnchanged: existing.status,
+      inventoryRestored: false,
+      refundInitiated: false,
     },
   });
 
   revalidatePath("/admin/orders");
-
-  revalidatePath(
-    `/admin/orders/${id}`
-  );
-
-  revalidatePath(
-    "/admin/inventory"
-  );
-
+  revalidatePath(`/admin/orders/${id}`);
   revalidateTag("orders");
-  revalidateTag("products");
 }
 
 export async function addOrderNote(input: {
