@@ -243,6 +243,9 @@ export async function POST(
 
                     quantity:
                       line.quantity,
+
+                    // Immutable server-resolved unit price for order reconciliation.
+                    unitPrice: line.unitPrice,
                   }),
                 ),
 
