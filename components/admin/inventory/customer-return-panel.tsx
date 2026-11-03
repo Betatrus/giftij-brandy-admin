@@ -63,7 +63,7 @@ export function CustomerReturnPanel() {
       setQuantity(1);
       setRestockQuantity(1);
       setRefundAmount("");
-      setRefundHandled(false);
+      setRefundStatus("NOT_REQUIRED");
       setNote("");
       await load();
     } catch (e) {
@@ -77,7 +77,7 @@ export function CustomerReturnPanel() {
     <section className="mb-6 rounded-2xl border border-cream bg-white p-5 shadow-soft">
       <div className="mb-4">
         <h2 className="font-display text-lg text-ink">Customer Return / Refund</h2>
-        <p className="mt-1 font-body text-sm text-ink/50">Record a return after the customer has received the item and the refund has been handled. Only resale-eligible units are added back to available stock.</p>
+        <p className="mt-1 font-body text-sm text-ink/50">Record a return after the customer has received and returned the item. Select the refund status based on the manual refund process; only resale-eligible units are added back to available stock.</p>
       </div>
       {loading ? <p className="text-sm text-ink/50">Loading delivered orders...</p> : items.length === 0 ? (
         <p className="rounded-xl bg-cream/40 p-3 text-sm text-ink/60">No delivered order items currently have quantities eligible for return.</p>
@@ -103,7 +103,7 @@ export function CustomerReturnPanel() {
               <option value="COMPLETED">Refund completed</option>
             </select>
           </label>
-          {selected.canRecordRefundAmount && <label className="font-body text-sm text-ink/70">Refund amount (₦, optional)
+          {selected?.canRecordRefundAmount && <label className="font-body text-sm text-ink/70">Refund amount (₦, optional)
             <input type="number" min={0} step="0.01" value={refundAmount} onChange={(e) => setRefundAmount(e.target.value)} className="mt-1 w-full rounded-xl border border-cream px-3 py-2" placeholder="Amount actually refunded" />
           </label>}
           <label className="font-body text-sm text-ink/70">Return / refund date
