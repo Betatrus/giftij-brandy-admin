@@ -23,10 +23,17 @@ import { generateUniqueValueLike } from "@/lib/utils/slug";
 
 export const runtime = "nodejs";
 
-class InvalidVerifiedPaymentError extends Error {
+class PaymentVerificationMismatchError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "InvalidVerifiedPaymentError";
+    this.name = "PaymentVerificationMismatchError";
+  }
+}
+
+class PaymentReviewRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaymentReviewRequiredError";
   }
 }
 
@@ -140,7 +147,7 @@ async function verifySuccessfulTransaction(
     data.amount !== expected || verified.currency !== "NGN" ||
     (data.currency ?? "NGN") !== "NGN"
   ) {
-    throw new InvalidVerifiedPaymentError(
+    throw new PaymentReviewRequiredError(
       "Paystack transaction verification did not match this checkout.",
     );
   }
@@ -159,7 +166,7 @@ function getValidatedPriceSnapshots(
   const cart = data.metadata?.cart;
 
   if (!Array.isArray(cart) || cart.length === 0) {
-    throw new InvalidVerifiedPaymentError("Payment metadata has no checkout cart.");
+    throw new PaymentReviewRequiredError("Payment metadata has no checkout cart.");
   }
 
   const grouped = new Map<string, CheckoutPriceSnapshot>();
@@ -173,7 +180,7 @@ function getValidatedPriceSnapshots(
       !Number.isSafeInteger(Math.round(line.unitPrice * 100)) ||
       Math.abs(line.unitPrice * 100 - Math.round(line.unitPrice * 100)) > 1e-7
     ) {
-      throw new InvalidVerifiedPaymentError("Payment metadata contains an invalid cart or price snapshot.");
+      throw new PaymentReviewRequiredError("Payment metadata contains an invalid cart or price snapshot.");
     }
 
     const variantId = line.variantId ?? null;
@@ -184,11 +191,11 @@ function getValidatedPriceSnapshots(
       // Duplicate product/variant rows are safe to combine only when they
       // carry the same immutable unit-price snapshot.
       if (existing.unitPrice !== line.unitPrice) {
-        throw new InvalidVerifiedPaymentError("Duplicate cart lines contain conflicting price snapshots.");
+        throw new PaymentReviewRequiredError("Duplicate cart lines contain conflicting price snapshots.");
       }
       const combinedQuantity = existing.quantity + line.quantity;
       if (!Number.isSafeInteger(combinedQuantity)) {
-        throw new InvalidVerifiedPaymentError("Payment metadata contains an invalid cart quantity.");
+        throw new PaymentReviewRequiredError("Payment metadata contains an invalid cart quantity.");
       }
       existing.quantity = combinedQuantity;
     } else {
@@ -214,7 +221,7 @@ function normalizeCartForComparison(
       !(line.variantId === undefined || line.variantId === null || typeof line.variantId === "string") ||
       !Number.isSafeInteger(line.quantity) || line.quantity <= 0
     ) {
-      throw new InvalidVerifiedPaymentError("Checkout reservation contains an invalid cart line.");
+      throw new PaymentReviewRequiredError("Checkout reservation contains an invalid cart line.");
     }
     const variantId = line.variantId ?? null;
     const key = `${line.productId}:${variantId ?? ""}`;
@@ -414,35 +421,47 @@ export async function POST(
       err,
     );
 
-    await logActivity({
-      systemSource:
-        "paystack_webhook",
+    // A Paystack-verified charge with invalid checkout metadata is persisted
+    // as a minimal review case. No customer details, amounts, or raw payloads
+    // are copied into the admin review queue.
+    if (err instanceof PaymentReviewRequiredError) {
+      await logActivity({
+        systemSource: "paystack_webhook",
+        action: "PAYMENT_REVIEW_REQUIRED",
+        resource: `PaystackReference:${event.data.reference}`,
+        metadata: {
+          reference: event.data.reference,
+          reason: err.message,
+          verificationState: "PAYSTACK_VERIFIED",
+        },
+      });
+      return NextResponse.json({ received: true, reviewRequired: true }, { status: 200 });
+    }
 
-      action:
-        "WEBHOOK_PROCESSING_ERROR",
-
-      resource:
-        `PaystackEvent:${event.event}`,
-
-      metadata: {
-        error:
-          err instanceof
-          Error
-            ? err.message
-            : String(err),
-
-        reference:
-          event.data
-            ?.reference,
-      },
-    });
-
-    // A verified-but-mismatched payment is not retryable. Transient failures
-    // (Paystack/network/database errors) return 500 so Paystack can retry.
-    if (err instanceof InvalidVerifiedPaymentError) {
+    if (err instanceof PaymentVerificationMismatchError) {
+      await logActivity({
+        systemSource: "paystack_webhook",
+        action: "PAYMENT_VERIFICATION_REJECTED",
+        resource: `PaystackReference:${event.data.reference}`,
+        metadata: {
+          reference: event.data.reference,
+          verificationState: "NOT_VERIFIED",
+        },
+      });
       return NextResponse.json({ received: true, ignored: true }, { status: 200 });
     }
 
+    await logActivity({
+      systemSource: "paystack_webhook",
+      action: "WEBHOOK_PROCESSING_ERROR",
+      resource: `PaystackEvent:${event.event}`,
+      metadata: {
+        error: err instanceof Error ? err.message : String(err),
+        reference: event.data?.reference,
+      },
+    });
+
+    // Transient Paystack/network/database failures remain retryable.
     return NextResponse.json({ received: false }, { status: 500 });
   }
 
@@ -489,8 +508,8 @@ async function handleChargeSuccess(
       .toLowerCase();
 
   if (!email) {
-    throw new Error(
-      "charge.success webhook has no customer email and identity cannot be resolved.",
+    throw new PaymentReviewRequiredError(
+      "Verified payment has no customer email; customer identity cannot be safely resolved.",
     );
   }
 
@@ -508,7 +527,7 @@ async function handleChargeSuccess(
     snapshotAmountKobo !== data.amount ||
     snapshotAmountKobo !== data.metadata?.expectedAmountKobo
   ) {
-    throw new InvalidVerifiedPaymentError("Checkout cart subtotal does not match the verified Paystack amount.");
+    throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
   }
 
   const {
@@ -571,7 +590,7 @@ async function handleChargeSuccess(
   for (const snapshot of priceSnapshots) {
     const product = productById.get(snapshot.productId);
     if (!product) {
-      throw new InvalidVerifiedPaymentError(`Cart references unknown product ${snapshot.productId}`);
+      throw new PaymentReviewRequiredError(`Cart references unknown product ${snapshot.productId}`);
     }
     effectiveUnitPriceByLine.set(
       `${snapshot.productId}:${snapshot.variantId ?? ""}`,
@@ -620,7 +639,7 @@ async function handleChargeSuccess(
 
         if (hasReservation) {
           if (data.metadata?.reservationId !== reservationResult.reservationId) {
-            throw new InvalidVerifiedPaymentError("Payment reservation ID does not match the attached checkout reservation.");
+            throw new PaymentReviewRequiredError("Payment reservation ID does not match the attached checkout reservation.");
           }
           const reservedCart = normalizeCartForComparison(reservationResult.cart);
           const metadataCart = normalizeCartForComparison(metadataCartLines);
@@ -632,31 +651,31 @@ async function handleChargeSuccess(
               line.quantity !== metadataCart[index]?.quantity
             )
           ) {
-            throw new InvalidVerifiedPaymentError("Payment cart does not match the reserved checkout cart.");
+            throw new PaymentReviewRequiredError("Payment cart does not match the reserved checkout cart.");
           }
         }
 
         for (const line of cartLines) {
           const key = `${line.productId}:${line.variantId ?? ""}`;
           if (!effectiveUnitPriceByLine.has(key)) {
-            throw new InvalidVerifiedPaymentError("A reserved cart line has no matching checkout price snapshot.");
+            throw new PaymentReviewRequiredError("A reserved cart line has no matching checkout price snapshot.");
           }
           const snapshot = priceSnapshots.find((item) =>
             item.productId === line.productId && item.variantId === (line.variantId ?? null)
           );
           if (!snapshot) {
-            throw new InvalidVerifiedPaymentError("A reserved cart line has no matching checkout price snapshot.");
+            throw new PaymentReviewRequiredError("A reserved cart line has no matching checkout price snapshot.");
           }
           subtotal += snapshot.unitPrice * line.quantity;
           const product = productById.get(line.productId);
-          if (!product) throw new InvalidVerifiedPaymentError(`Cart references unknown product ${line.productId}`);
+          if (!product) throw new PaymentReviewRequiredError(`Cart references unknown product ${line.productId}`);
           costBasis += Number(product.costPrice) * line.quantity;
         }
 
         if (!Number.isSafeInteger(Math.round(subtotal * 100)) ||
             Math.round(subtotal * 100) !== data.amount ||
             Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo)) {
-          throw new InvalidVerifiedPaymentError("Checkout cart subtotal does not match the verified Paystack amount.");
+          throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
         }
 
         const customer = await findOrCreateCustomerByEmailInTransaction(
