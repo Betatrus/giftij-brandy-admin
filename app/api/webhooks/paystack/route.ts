@@ -497,6 +497,18 @@ async function handleChargeSuccess(
   // order, or inventory writes. A verified charge with an invalid cart must
   // not create a partial customer record as a side effect.
   const priceSnapshots = getValidatedPriceSnapshots(data);
+  const snapshotSubtotal = priceSnapshots.reduce(
+    (sum, line) => sum + line.unitPrice * line.quantity,
+    0,
+  );
+  const snapshotAmountKobo = Math.round(snapshotSubtotal * 100);
+  if (
+    !Number.isSafeInteger(snapshotAmountKobo) ||
+    snapshotAmountKobo !== data.amount ||
+    snapshotAmountKobo !== data.metadata?.expectedAmountKobo
+  ) {
+    throw new InvalidVerifiedPaymentError("Checkout cart subtotal does not match the verified Paystack amount.");
+  }
 
   const {
     shippingAddress,
@@ -621,7 +633,7 @@ async function handleChargeSuccess(
           : normalizeCartForComparison(metadataCartLines);
 
         if (hasReservation) {
-          if (data.metadata?.reservationId && data.metadata.reservationId !== reservationResult.reservationId) {
+          if (data.metadata?.reservationId !== reservationResult.reservationId) {
             throw new InvalidVerifiedPaymentError("Payment reservation ID does not match the attached checkout reservation.");
           }
           const reservedCart = normalizeCartForComparison(reservationResult.cart);
