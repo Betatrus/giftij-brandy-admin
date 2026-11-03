@@ -187,3 +187,17 @@ export const bulkAdjustStockSchema =
 
 export type BulkAdjustStockInput =
   z.infer<typeof bulkAdjustStockSchema>;
+
+export const recordCustomerReturnSchema = z.object({
+  orderItemId: z.string().min(1),
+  quantity: z.coerce.number().int().min(1),
+  restockQuantity: z.coerce.number().int().min(0),
+  refundAmount: z.coerce.number().min(0).optional(),
+  businessDate: businessDateSchema,
+  note: z.string().max(1000).optional(),
+}).refine((data) => data.restockQuantity <= data.quantity, {
+  message: "Restock quantity cannot exceed the quantity returned.",
+  path: ["restockQuantity"],
+});
+
+export type RecordCustomerReturnInput = z.infer<typeof recordCustomerReturnSchema>;
