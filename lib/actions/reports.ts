@@ -261,3 +261,43 @@ export async function getFinancialReport(filters: ReportFiltersInput) {
     truncated,
   };
 }
+
+
+export async function getCustomerReturnsReport() {
+  await requireReportsAccess();
+  const returns = await prisma.customerReturn.findMany({
+    orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }],
+    take: REPORT_ROW_CAP,
+    include: {
+      order: { select: { orderNumber: true, customer: { select: { name: true, email: true } } } },
+      orderItem: { select: { product: { select: { name: true, sku: true } }, variant: { select: { value: true } } } },
+      processedBy: { select: { name: true, email: true } },
+    },
+  });
+  const rows = returns.map((entry) => ({
+    id: entry.id,
+    date: entry.businessDate,
+    orderNumber: entry.order.orderNumber,
+    customerName: entry.order.customer.name,
+    customerEmail: entry.order.customer.email,
+    productName: entry.orderItem.product.name,
+    sku: entry.orderItem.product.sku,
+    variant: entry.orderItem.variant?.value ?? "",
+    quantity: entry.quantity,
+    restockQuantity: entry.restockQuantity,
+    refundAmount: entry.refundAmount === null ? null : Number(entry.refundAmount),
+    note: entry.note ?? "",
+    processedBy: entry.processedBy.name || entry.processedBy.email,
+  }));
+  return {
+    rows,
+    summary: {
+      returnCount: rows.length,
+      unitsReturned: rows.reduce((sum, row) => sum + row.quantity, 0),
+      unitsRestocked: rows.reduce((sum, row) => sum + row.restockQuantity, 0),
+      refundAmount: rows.reduce((sum, row) => sum + (row.refundAmount ?? 0), 0),
+    },
+    truncated: returns.length >= REPORT_ROW_CAP,
+  };
+}
+
