@@ -18,7 +18,6 @@ import {
   consumeCheckoutReservation,
   releaseCheckoutReservationByReference,
 } from "@/lib/orders/stock-reservation";
-import { computeEffectivePrice } from "@/lib/pricing/effective-price";
 import { generateUniqueValueLike } from "@/lib/utils/slug";
 
 export const runtime = "nodejs";
@@ -598,11 +597,12 @@ async function handleChargeSuccess(
             data.reference,
           );
 
-        const cartLines = reservationResult.consumed
+        const hasReservation = reservationResult.cart.length > 0;
+        const cartLines = hasReservation
           ? normalizeCartForComparison(reservationResult.cart)
           : normalizeCartForComparison(metadataCartLines);
 
-        if (reservationResult.consumed) {
+        if (hasReservation) {
           if (data.metadata?.reservationId && data.metadata.reservationId !== reservationResult.reservationId) {
             throw new InvalidVerifiedPaymentError("Payment reservation ID does not match the attached checkout reservation.");
           }
