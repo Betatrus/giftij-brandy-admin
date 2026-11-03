@@ -38,14 +38,9 @@ export async function GET(req: NextRequest) {
       select: { orderNumber: true, status: true, stockUnavailable: true, createdAt: true },
     });
 
-    if (order) {
+    if (order !== null) {
       // Internal stock allocation state must never be exposed to customers.
       // A verified payment remains successful even when fulfilment needs admin attention.
-      return withCors(
-        ok({ status: "confirmed" as const, orderNumber: order.orderNumber }),
-        origin,
-      );
-
       return withCors(
         ok({ status: "confirmed" as const, orderNumber: order.orderNumber }),
         origin,
