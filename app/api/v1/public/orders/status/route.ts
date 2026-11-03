@@ -39,15 +39,12 @@ export async function GET(req: NextRequest) {
     });
 
     if (order) {
-      if (order.stockUnavailable) {
-        return withCors(
-          ok({
-            status: "stock_unavailable" as const,
-            orderNumber: order.orderNumber,
-          }),
-          origin,
-        );
-      }
+      // Internal stock allocation state must never be exposed to customers.
+      // A verified payment remains successful even when fulfilment needs admin attention.
+      return withCors(
+        ok({ status: "confirmed" as const, orderNumber: order.orderNumber }),
+        origin,
+      );
 
       return withCors(
         ok({ status: "confirmed" as const, orderNumber: order.orderNumber }),
