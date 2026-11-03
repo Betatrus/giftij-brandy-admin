@@ -264,7 +264,8 @@ export async function getFinancialReport(filters: ReportFiltersInput) {
 
 
 export async function getCustomerReturnsReport() {
-  await requireReportsAccess();
+  const session = await requireReportsAccess();
+  const canSeeFinancials = hasPermission(session.user.role, "reports:read:financials");
   const returns = await prisma.customerReturn.findMany({
     orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }],
     take: REPORT_ROW_CAP,
@@ -285,7 +286,7 @@ export async function getCustomerReturnsReport() {
     variant: entry.orderItem.variant?.value ?? "",
     quantity: entry.quantity,
     restockQuantity: entry.restockQuantity,
-    refundAmount: entry.refundAmount === null ? null : Number(entry.refundAmount),
+    refundAmount: !canSeeFinancials || entry.refundAmount === null ? null : Number(entry.refundAmount),
     note: entry.note ?? "",
     processedBy: entry.processedBy.name || entry.processedBy.email,
   }));
@@ -295,7 +296,7 @@ export async function getCustomerReturnsReport() {
       returnCount: rows.length,
       unitsReturned: rows.reduce((sum, row) => sum + row.quantity, 0),
       unitsRestocked: rows.reduce((sum, row) => sum + row.restockQuantity, 0),
-      refundAmount: rows.reduce((sum, row) => sum + (row.refundAmount ?? 0), 0),
+      refundAmount: canSeeFinancials ? rows.reduce((sum, row) => sum + (row.refundAmount ?? 0), 0) : null,
     },
     truncated: returns.length >= REPORT_ROW_CAP,
   };
