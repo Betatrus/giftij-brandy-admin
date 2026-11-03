@@ -240,7 +240,7 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
     throw new Error("Return date must be valid and cannot be in the future.");
   }
 
-  const result = await prisma.$transaction(async (tx) => {
+  const returnId = await prisma.$transaction(async (tx) => {
     const lockedItems = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "OrderItem" WHERE "id" = ${parsed.orderItemId} FOR UPDATE
     `;
@@ -305,21 +305,33 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
           variant: item.variant?.value ?? null, quantity: parsed.quantity,
           restockQuantity: parsed.restockQuantity, refundStatus: parsed.refundStatus } },
     });
-    return { record, item };
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "INVENTORY_CUSTOMER_RETURN",
+        resource: `CustomerReturn:${record.id}`,
+        metadata: {
+          orderNumber: item.order.orderNumber,
+          orderItemId: item.id,
+          productName: item.product.name,
+          variant: item.variant?.value ?? null,
+          quantityReturned: parsed.quantity,
+          quantityRestocked: parsed.restockQuantity,
+          refundStatus: parsed.refundStatus,
+          ...(canRecordRefundAmount ? { refundAmount: parsed.refundAmount ?? null } : {}),
+          businessDate: parsed.businessDate,
+          note: parsed.note ?? null,
+        },
+      },
+    });
+    return record.id;
   });
 
-  await logActivity({
-    userId: session.user.id, action: "INVENTORY_CUSTOMER_RETURN",
-    resource: `CustomerReturn:${result.record.id}`,
-    metadata: { orderNumber: result.item.order.orderNumber, orderItemId: result.item.id,
-      productName: result.item.product.name, variant: result.item.variant?.value ?? null,
-      quantityReturned: parsed.quantity, quantityRestocked: parsed.restockQuantity,
-      refundStatus: parsed.refundStatus, ...(canRecordRefundAmount ? { refundAmount: parsed.refundAmount ?? null } : {}), businessDate: parsed.businessDate, note: parsed.note ?? null },
-  });
+
   revalidateInventory();
   revalidatePath("/admin/reports");
   revalidatePath("/admin/customers");
-  return { success: true, returnId: result.record.id };
+  return { success: true, returnId };
 }
 
 
@@ -496,38 +508,30 @@ export async function adjustStock(
         performedById: session.user.id,
       },
     });
-
-    return {
-      inventory,
-      beforeStock,
-      afterStock,
-      originalPrice,
-    };
-  });
-
-  const { inventory, beforeStock, afterStock, originalPrice } = result;
-
-  await logActivity({
-    userId: session.user.id,
-    action: activityAction(parsed.adjustmentReason),
-    resource: `Inventory:${inventory.id}`,
-    metadata: {
-      productId: inventory.product.id,
-      productName: inventory.product.name,
-      productSku: inventory.product.sku,
-      targetKind: "base",
-      changeType: parsed.changeType,
-      adjustmentReason: parsed.adjustmentReason,
-      businessDate: parsed.businessDate,
-      requestedQuantity: parsed.quantity,
-      quantityChanged: actualQuantityChanged(beforeStock, afterStock),
-      beforeStock,
-      afterStock,
-      note: parsed.reason ?? null,
-      unitSellingPrice: parsed.unitSellingPrice ?? null,
-      originalPrice: originalPrice ?? null,
-      performedByName: session.user.name ?? session.user.email ?? "Admin",
-    },
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: activityAction(parsed.adjustmentReason),
+        resource: `Inventory:${inventory.id}`,
+        metadata: {
+          productId: inventory.product.id,
+          productName: inventory.product.name,
+          productSku: inventory.product.sku,
+          targetKind: "base",
+          changeType: parsed.changeType,
+          adjustmentReason: parsed.adjustmentReason,
+          businessDate: parsed.businessDate,
+          requestedQuantity: parsed.quantity,
+          quantityChanged: actualQuantityChanged(beforeStock, afterStock),
+          beforeStock,
+          afterStock,
+          note: parsed.reason ?? null,
+          unitSellingPrice: parsed.unitSellingPrice ?? null,
+          originalPrice: originalPrice ?? null,
+          performedByName: session.user.name ?? session.user.email ?? "Admin",
+        },
+      },
+    });
   });
 
   revalidateInventory();
@@ -603,41 +607,33 @@ export async function adjustVariantStock(
         performedById: session.user.id,
       },
     });
-
-    return {
-      variant,
-      beforeStock,
-      afterStock,
-      originalPrice,
-    };
-  });
-
-  const { variant, beforeStock, afterStock, originalPrice } = result;
-
-  await logActivity({
-    userId: session.user.id,
-    action: activityAction(parsed.adjustmentReason),
-    resource: `ProductVariant:${variant.id}`,
-    metadata: {
-      productId: variant.product.id,
-      productName: variant.product.name,
-      productSku: variant.product.sku,
-      variantId: variant.id,
-      variantLabel: variant.value,
-      variantSku: variant.sku,
-      targetKind: "variant",
-      changeType: parsed.changeType,
-      adjustmentReason: parsed.adjustmentReason,
-      businessDate: parsed.businessDate,
-      requestedQuantity: parsed.quantity,
-      quantityChanged: actualQuantityChanged(beforeStock, afterStock),
-      beforeStock,
-      afterStock,
-      note: parsed.reason ?? null,
-      unitSellingPrice: parsed.unitSellingPrice ?? null,
-      originalPrice: originalPrice ?? null,
-      performedByName: session.user.name ?? session.user.email ?? "Admin",
-    },
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: activityAction(parsed.adjustmentReason),
+        resource: `ProductVariant:${variant.id}`,
+        metadata: {
+          productId: variant.product.id,
+          productName: variant.product.name,
+          productSku: variant.product.sku,
+          variantId: variant.id,
+          variantLabel: variant.value,
+          variantSku: variant.sku,
+          targetKind: "variant",
+          changeType: parsed.changeType,
+          adjustmentReason: parsed.adjustmentReason,
+          businessDate: parsed.businessDate,
+          requestedQuantity: parsed.quantity,
+          quantityChanged: actualQuantityChanged(beforeStock, afterStock),
+          beforeStock,
+          afterStock,
+          note: parsed.reason ?? null,
+          unitSellingPrice: parsed.unitSellingPrice ?? null,
+          originalPrice: originalPrice ?? null,
+          performedByName: session.user.name ?? session.user.email ?? "Admin",
+        },
+      },
+    });
   });
 
   revalidateInventory();
