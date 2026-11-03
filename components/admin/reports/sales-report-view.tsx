@@ -24,6 +24,14 @@ type SalesLine = {
   categoryNames: string[];
   variantValue: string | null;
   quantity: number;
+  soldQuantity: number;
+  returnedQuantity: number;
+  completedReturnedQuantity: number;
+  returnedSalesValue: number;
+  actualRefundAmount: number | null;
+  refundStatus: "NOT_RETURNED" | "PENDING" | "COMPLETED" | "PARTIAL" | "RETURN_RECORDED";
+  refundDate: string | null;
+  returnDetails: Array<{ id: string; quantity: number; restockQuantity: number; refundStatus: string; refundAmount: number | null; businessDate: string; note: string | null }>;
   unitPrice: number | null;
   revenue: number | null;
   revenueKnown: boolean;
@@ -88,6 +96,12 @@ export function SalesReportView({
         unitPrice: line.unitPrice ?? "",
         originalPrice: line.originalPrice ?? "",
         discountAmount: line.discountAmount ?? "",
+        returnedQuantity: line.returnedQuantity,
+        completedReturnedQuantity: line.completedReturnedQuantity,
+        returnedSalesValue: line.returnedSalesValue,
+        refundStatus: line.refundStatus,
+        refundDate: line.refundDate ?? "",
+        actualRefundAmount: line.actualRefundAmount ?? "",
       })),
       [
         { key: "date", label: "Date" },
@@ -98,7 +112,13 @@ export function SalesReportView({
         { key: "originalPrice", label: "Original Price" },
         { key: "unitPrice", label: "Actual Selling Price" },
         { key: "discountAmount", label: "Discount" },
-        { key: "revenue", label: "Revenue" },
+        { key: "revenue", label: "Net Revenue" },
+        { key: "returnedQuantity", label: "Returned Qty" },
+        { key: "completedReturnedQuantity", label: "Refunded Qty" },
+        { key: "returnedSalesValue", label: "Refunded Sales Value" },
+        { key: "refundStatus", label: "Refund Status" },
+        { key: "refundDate", label: "Refund Date" },
+        { key: "actualRefundAmount", label: "Actual Refund Amount" },
         { key: "revenueKnown", label: "Price Known?" },
         { key: "customerName", label: "Customer" },
       ],
@@ -178,6 +198,7 @@ export function SalesReportView({
               <th className="px-4 py-3 text-right">Qty</th>
               <th className="px-4 py-3 text-right">Revenue</th>
               <th className="px-4 py-3">Customer</th>
+              <th className="px-4 py-3">Refund reconciliation</th>
             </tr>
           </thead>
 
@@ -185,7 +206,7 @@ export function SalesReportView({
             {loading ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   className="px-4 py-10 text-center text-ink/40"
                 >
                   Loading...
@@ -255,6 +276,22 @@ export function SalesReportView({
                   <td className="px-4 py-3 text-ink/50">
                     {line.customerName ?? "Walk-in"}
                   </td>
+                  <td className="px-4 py-3 text-xs">
+                    {line.refundStatus === "NOT_RETURNED" ? <span className="text-ink/40">—</span> : (
+                      <div className="space-y-1">
+                        <Badge label={line.refundStatus === "COMPLETED" ? "Refunded" : line.refundStatus === "PENDING" ? "Refund pending" : line.refundStatus === "PARTIAL" ? "Partially refunded" : "Return recorded"} tone={line.refundStatus === "COMPLETED" ? "ACTIVE" : "DRAFT"} />
+                        <p className="text-ink/60">{line.completedReturnedQuantity} of {line.returnedQuantity} returned units refunded</p>
+                        {line.refundDate && <p className="text-ink/40">Completed {new Date(line.refundDate).toLocaleDateString()}</p>}
+                        {line.actualRefundAmount !== null && <p className="font-medium text-ink">{formatNaira(line.actualRefundAmount)} actual refund</p>}
+                        <details className="cursor-pointer text-ink/60">
+                          <summary>View refund details</summary>
+                          <div className="mt-1 space-y-1">
+                            {line.returnDetails.map((entry) => <p key={entry.id}>{new Date(entry.businessDate).toLocaleDateString()} · {entry.quantity} returned · {entry.refundStatus.replace("_", " ").toLowerCase()}{entry.refundAmount !== null ? " · " + formatNaira(entry.refundAmount) + " actual" : ""}</p>)}
+                          </div>
+                        </details>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               ))
             )}
@@ -317,6 +354,16 @@ export function SalesReportView({
                   </p>
                 )}
 
+              {line.refundStatus !== "NOT_RETURNED" && (
+                <div className="mt-2 rounded-lg bg-cream/50 p-2 font-body text-xs text-ink/60">
+                  <p>{line.refundStatus === "COMPLETED" ? "Refunded" : line.refundStatus === "PENDING" ? "Refund pending" : line.refundStatus === "PARTIAL" ? "Partially refunded" : "Return recorded"} · {line.returnedQuantity} returned</p>
+                  {line.refundDate && <p>Completed {new Date(line.refundDate).toLocaleDateString()}</p>}
+                  {line.actualRefundAmount !== null && <p>{formatNaira(line.actualRefundAmount)} actual refund</p>}
+                  <details className="mt-1"><summary className="cursor-pointer">View refund details</summary>
+                    {line.returnDetails.map((entry) => <p key={entry.id} className="mt-1">{new Date(entry.businessDate).toLocaleDateString()} · {entry.quantity} units · {entry.refundStatus.replace("_", " ").toLowerCase()}{entry.refundAmount !== null ? " · " + formatNaira(entry.refundAmount) : ""}</p>)}
+                  </details>
+                </div>
+              )}
               <p className="mt-1 font-body text-[11px] text-ink/40">
                 {new Date(line.date).toLocaleDateString()}
               </p>
