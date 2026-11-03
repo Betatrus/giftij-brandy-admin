@@ -224,7 +224,7 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
   if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to record customer returns");
   const parsed = recordCustomerReturnSchema.parse(input);
   const businessDate = new Date(parsed.businessDate + "T00:00:00.000Z");
-  if (Number.isNaN(businessDate.getTime()) || parsed.businessDate > new Date().toISOString().slice(0, 10)) {
+  if (Number.isNaN(businessDate.getTime()) || businessDate.toISOString().slice(0, 10) !== parsed.businessDate || parsed.businessDate > new Date().toISOString().slice(0, 10)) {
     throw new Error("Return date must be valid and cannot be in the future.");
   }
 
@@ -241,7 +241,7 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
         variant: { select: { id: true, value: true, sku: true } },
       },
     });
-    if (!["DELIVERED", "RETURNED", "REFUNDED"].includes(item.order.status)) {
+    if (!["DELIVERED", "RETURNED"].includes(item.order.status)) {
       throw new Error("Only items from delivered orders can be returned.");
     }
     const previous = await tx.customerReturn.aggregate({
@@ -314,7 +314,7 @@ export async function listReturnableOrderItems() {
   const session = await requireSession();
   if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to manage customer returns");
   const items = await prisma.orderItem.findMany({
-    where: { order: { status: { in: ["DELIVERED", "RETURNED", "REFUNDED"] } } },
+    where: { order: { status: { in: ["DELIVERED", "RETURNED"] } } },
     orderBy: { order: { createdAt: "desc" } },
     take: 300,
     select: {
