@@ -12,6 +12,12 @@ datasource db {
 // AUTH & RBAC
 // ============================================================
 
+enum CustomerRefundStatus {
+  NOT_REQUIRED
+  PENDING
+  COMPLETED
+}
+
 enum StaffRole {
   SUPER_ADMIN     // full access, including financial data
   SUPPORT_ADMIN   // operational access only — financials hidden
@@ -422,6 +428,7 @@ model CustomerReturn {
   quantity        Int
   restockQuantity Int       @default(0)
   refundAmount    Decimal?  @db.Decimal(12, 2)
+  refundStatus    CustomerRefundStatus @default(NOT_REQUIRED)
   businessDate    DateTime  @db.Date
   note            String?   @db.Text
   processedById   String
