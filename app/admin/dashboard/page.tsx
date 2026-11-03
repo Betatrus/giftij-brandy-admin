@@ -3,7 +3,6 @@ import { getDashboardOverview } from "@/lib/actions/dashboard";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { MetricCard } from "@/components/admin/shared/metric-card";
 import { formatNaira } from "@/lib/utils/format-money";
-import Link from "next/link";
 
 export default async function DashboardPage() {
   const session = await auth();
