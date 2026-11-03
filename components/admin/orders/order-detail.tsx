@@ -11,6 +11,7 @@ import {
   completeOrder,
   cancelOrder,
   resolveCancellationReview,
+  resolveStockUnavailableOrder,
   addOrderNote,
 } from "@/lib/actions/orders";
 import {
@@ -184,6 +185,23 @@ export function OrderDetail({
     }
   }
 
+  async function handleResolveStock() {
+    setError(null);
+    setIsPending(true);
+    try {
+      await resolveStockUnavailableOrder(order.id);
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not allocate stock for this order."
+      );
+    } finally {
+      setIsPending(false);
+    }
+  }
+
   async function handleCancel() {
     setError(null);
     setIsPending(true);
@@ -306,9 +324,16 @@ export function OrderDetail({
           <p className="font-body text-sm font-semibold">Payment received — stock unavailable</p>
           <p className="font-body text-sm mt-1">
             Paystack confirmed this payment, but the full order quantity could not be allocated.
-            No inventory was deducted. Review availability and contact the customer about fulfilment
-            or a separately approved refund.
+            No inventory was deducted. Source or receive the missing items through Inventory first,
+            then allocate the complete order here. This action does not issue a refund.
           </p>
+          <button
+            onClick={handleResolveStock}
+            disabled={isPending || markingViewed || order.cancellationReviewStatus === "REQUESTED" || order.cancellationReviewStatus === "APPROVED"}
+            className="mt-3 rounded-xl bg-amber-900 text-white font-body text-sm px-4 py-2 disabled:opacity-50"
+          >
+            {isPending ? "Allocating stock..." : "Allocate received stock to this order"}
+          </button>
         </div>
       )}
 
