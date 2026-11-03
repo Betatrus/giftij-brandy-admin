@@ -1,6 +1,6 @@
 import { v2 as cloudinary } from "cloudinary";
 
-export const PRODUCT_MEDIA_FOLDER = "giftij-brandy/products";
+export const PRODUCT_MEDIA_FOLDER = "giftij-brandy/products";\nexport const BLOG_MEDIA_FOLDER = "giftij-brandy/blog";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -89,3 +89,14 @@ export async function deleteImage(cloudinaryId: string) {
 }
 
 export default cloudinary;
+
+export function createSignedBlogUpload() {
+  const { cloudName, apiKey, apiSecret } = requireCloudinaryConfig();
+  const timestamp = Math.floor(Date.now() / 1000);
+  const folder = BLOG_MEDIA_FOLDER;
+  const signature = cloudinary.utils.api_sign_request({ timestamp, folder }, apiSecret);
+  return { cloudName, apiKey, timestamp, folder, signature };
+}
+export function isBlogMediaCloudinaryId(cloudinaryId: string) {
+  return cloudinaryId.startsWith(`${BLOG_MEDIA_FOLDER}/`);
+}

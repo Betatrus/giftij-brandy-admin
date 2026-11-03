@@ -2,7 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { logActivity } from "@/lib/activity-log";
+import { logActivity } from "@/lib/activity-log";\nimport { createSignedBlogUpload, getImageResource, isBlogMediaCloudinaryId } from "@/lib/cloudinary";
 import { revalidatePath } from "next/cache";
 
 async function requireEditor() {
@@ -124,4 +124,29 @@ export async function updateBlogVisibility(input: { navigationVisible: boolean; 
   });
   await logActivity({ userId: session.user.id, action: "BLOG_VISIBILITY_SETTINGS_UPDATED", resource: "StoreSettings:singleton", metadata: input });
   for (const path of ["/admin/settings", "/blog", "/sitemap.xml"]) revalidatePath(path);
+}
+
+export async function getBlogCloudinaryUploadSignature() {
+  await requireEditor();
+  return createSignedBlogUpload();
+}
+
+export async function attachBlogCoverImage(input: { postId: string; cloudinaryId: string }) {
+  const session = await requireEditor();
+  if (!isBlogMediaCloudinaryId(input.cloudinaryId)) throw new Error("Invalid blog image asset.");
+  const asset = await getImageResource(input.cloudinaryId);
+  if (!isBlogMediaCloudinaryId(asset.cloudinaryId)) throw new Error("Invalid blog image asset.");
+  const post = await prisma.blogPost.update({
+    where: { id: input.postId },
+    data: { coverImageUrl: asset.url, coverImagePublicId: asset.cloudinaryId },
+    select: { id: true, coverImageUrl: true, coverImagePublicId: true },
+  });
+  await logActivity({
+    userId: session.user.id,
+    action: "BLOG_COVER_IMAGE_UPLOADED",
+    resource: `BlogPost:${post.id}`,
+    metadata: { cloudinaryId: post.coverImagePublicId },
+  });
+  revalidatePath("/admin/blog");
+  return { url: post.coverImageUrl, cloudinaryId: post.coverImagePublicId };
 }
