@@ -2,7 +2,8 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { logActivity } from "@/lib/activity-log";\nimport { createSignedBlogUpload, getImageResource, isBlogMediaCloudinaryId } from "@/lib/cloudinary";
+import { logActivity } from "@/lib/activity-log";
+import { createSignedBlogUpload, getImageResource, isBlogMediaCloudinaryId } from "@/lib/cloudinary";
 import { revalidatePath } from "next/cache";
 
 async function requireEditor() {
@@ -13,8 +14,7 @@ async function requireEditor() {
 }
 
 function slugify(value: string) {
-  return value.toLowerCase().normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90);
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90);
 }
 
 function required(value: string, label: string, max: number) {

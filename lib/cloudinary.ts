@@ -1,6 +1,7 @@
 import { v2 as cloudinary } from "cloudinary";
 
-export const PRODUCT_MEDIA_FOLDER = "giftij-brandy/products";\nexport const BLOG_MEDIA_FOLDER = "giftij-brandy/blog";
+export const PRODUCT_MEDIA_FOLDER = "giftij-brandy/products";
+export const BLOG_MEDIA_FOLDER = "giftij-brandy/blog";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,

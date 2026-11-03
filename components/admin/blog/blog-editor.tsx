@@ -33,7 +33,8 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
   const [seoDescription, setSeoDescription] = useState(post?.seoDescription ?? "");
   const [canonicalUrl, setCanonicalUrl] = useState(post?.canonicalUrl ?? "");
   const [featured, setFeatured] = useState(post?.isFeatured ?? false);
-  const [indexable, setIndexable] = useState(post?.isIndexable ?? false);\n  const [uploading, setUploading] = useState(false);
+  const [indexable, setIndexable] = useState(post?.isIndexable ?? false);
+  const [uploading, setUploading] = useState(false);
 
   function submit(intent: "DRAFT" | "PUBLISH") {
     setError("");
@@ -50,7 +51,24 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
     });
   }
 
-  async function uploadCover(file?: File) {\n    if (!file) return;\n    if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) { setError("Choose an image file up to 8 MB."); return; }\n    if (!post?.id) { setError("Save the article as a draft before uploading its cover image."); return; }\n    setError(""); setUploading(true);\n    try {\n      const signed = await getBlogCloudinaryUploadSignature();\n      const body = new FormData(); body.append("file", file); body.append("api_key", signed.apiKey); body.append("timestamp", String(signed.timestamp)); body.append("folder", signed.folder); body.append("signature", signed.signature);\n      const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signed.cloudName)}/image/upload`, { method: "POST", body });\n      const payload = await response.json();\n      if (!response.ok || typeof payload.public_id !== "string") throw new Error(payload?.error?.message || "Image upload failed.");\n      const saved = await attachBlogCoverImage({ postId: post.id, cloudinaryId: payload.public_id });\n      setCoverImageUrl(saved.url || "");\n    } catch (e) { setError(e instanceof Error ? e.message : "Could not upload cover image."); }\n    finally { setUploading(false); }\n  }\n\n  async function addCategory() {
+  async function uploadCover(file?: File) {
+    if (!file) return;
+    if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) { setError("Choose an image file up to 8 MB."); return; }
+    if (!post?.id) { setError("Save the article as a draft before uploading its cover image."); return; }
+    setError(""); setUploading(true);
+    try {
+      const signed = await getBlogCloudinaryUploadSignature();
+      const body = new FormData(); body.append("file", file); body.append("api_key", signed.apiKey); body.append("timestamp", String(signed.timestamp)); body.append("folder", signed.folder); body.append("signature", signed.signature);
+      const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signed.cloudName)}/image/upload`, { method: "POST", body });
+      const payload = await response.json();
+      if (!response.ok || typeof payload.public_id !== "string") throw new Error(payload?.error?.message || "Image upload failed.");
+      const saved = await attachBlogCoverImage({ postId: post.id, cloudinaryId: payload.public_id });
+      setCoverImageUrl(saved.url || "");
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not upload cover image."); }
+    finally { setUploading(false); }
+  }
+
+  async function addCategory() {
     const name = window.prompt("New blog category name");
     if (!name?.trim()) return;
     startTransition(async () => {
@@ -93,7 +111,8 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
     <div className="flex flex-wrap gap-3">
       <button type="button" disabled={pending} onClick={()=>submit("DRAFT")} className="rounded-xl border border-cream px-5 py-3 text-sm font-medium disabled:opacity-50">{pending?"Saving...":"Save draft"}</button>
       <button type="button" disabled={pending} onClick={()=>submit("PUBLISH")} className="rounded-xl bg-gold px-5 py-3 text-sm font-medium text-white disabled:opacity-50">{pending?"Saving...":post?.status==="PUBLISHED"?"Save & update published article":"Publish article"}</button>
-      {post && <a href={`/admin/blog/${post.id}/preview`} target="_blank" rel="noreferrer" className="rounded-xl border border-cream px-4 py-3 text-sm">Preview</a>}\n      {post && post.status!=="ARCHIVED" && <button type="button" disabled={pending} onClick={()=>startTransition(async()=>{try{await archiveBlogPost(post.id);router.push("/admin/blog");router.refresh();}catch(e){setError(e instanceof Error?e.message:"Could not archive article.");}})} className="ml-auto rounded-xl px-4 py-3 text-sm text-red-600">Archive</button>}
+      {post && <a href={`/admin/blog/${post.id}/preview`} target="_blank" rel="noreferrer" className="rounded-xl border border-cream px-4 py-3 text-sm">Preview</a>}
+      {post && post.status!=="ARCHIVED" && <button type="button" disabled={pending} onClick={()=>startTransition(async()=>{try{await archiveBlogPost(post.id);router.push("/admin/blog");router.refresh();}catch(e){setError(e instanceof Error?e.message:"Could not archive article.");}})} className="ml-auto rounded-xl px-4 py-3 text-sm text-red-600">Archive</button>}
     </div>
   </form>;
 }
