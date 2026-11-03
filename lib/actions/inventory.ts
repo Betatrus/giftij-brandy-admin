@@ -315,6 +315,75 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
 }
 
 
+export async function listPendingCustomerRefunds() {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to manage customer refunds");
+  }
+  const records = await prisma.customerReturn.findMany({
+    where: { refundStatus: "PENDING" },
+    orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
+    take: 200,
+    select: {
+      id: true, quantity: true, restockQuantity: true, businessDate: true, note: true,
+      order: { select: { orderNumber: true, customer: { select: { name: true } } } },
+      orderItem: { select: { product: { select: { name: true } }, variant: { select: { value: true } } } },
+    },
+  });
+  return records.map((record) => ({
+    id: record.id,
+    orderNumber: record.order.orderNumber,
+    customerName: record.order.customer.name,
+    productName: record.orderItem.product.name,
+    variant: record.orderItem.variant?.value ?? null,
+    quantity: record.quantity,
+    businessDate: record.businessDate.toISOString().slice(0, 10),
+    note: record.note,
+  }));
+}
+
+export async function completeCustomerRefund(returnId: string) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to complete customer refunds");
+  }
+  const id = z.string().min(1).parse(returnId);
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.customerReturn.updateMany({
+      where: { id, refundStatus: "PENDING" },
+      data: { refundStatus: "COMPLETED" },
+    });
+    if (updated.count !== 1) {
+      throw new Error("This refund is no longer pending. Refresh the list and check its current status.");
+    }
+    return tx.customerReturn.findUniqueOrThrow({
+      where: { id },
+      include: {
+        order: { select: { orderNumber: true } },
+        orderItem: { select: { product: { select: { name: true } } } },
+      },
+    });
+  });
+  await logActivity({
+    userId: session.user.id,
+    action: "CUSTOMER_REFUND_COMPLETED",
+    resource: `CustomerReturn:${result.id}`,
+    metadata: {
+      orderNumber: result.order.orderNumber,
+      productName: result.orderItem.product.name,
+      quantityReturned: result.quantity,
+      refundStatus: "COMPLETED",
+      completedBy: session.user.name ?? session.user.email ?? "Admin",
+      completedAt: new Date().toISOString(),
+    },
+  });
+  revalidatePath("/admin/inventory");
+  revalidatePath("/admin/reports");
+  revalidatePath("/admin/analytics");
+  revalidatePath("/admin/customers");
+  return { success: true };
+}
+
 export async function listReturnableOrderItems() {
   const session = await requireSession();
   if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to manage customer returns");
