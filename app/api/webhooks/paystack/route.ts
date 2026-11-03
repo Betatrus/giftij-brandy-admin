@@ -425,16 +425,29 @@ export async function POST(
     // as a minimal review case. No customer details, amounts, or raw payloads
     // are copied into the admin review queue.
     if (err instanceof PaymentReviewRequiredError) {
-      await logActivity({
-        systemSource: "paystack_webhook",
-        action: "PAYMENT_REVIEW_REQUIRED",
-        resource: `PaystackReference:${event.data.reference}`,
-        metadata: {
-          reference: event.data.reference,
-          reason: err.message,
-          verificationState: "PAYSTACK_VERIFIED",
+      const resource = `PaystackReference:${event.data.reference}`;
+      const existingReview = await prisma.activityLog.findFirst({
+        where: {
+          action: "PAYMENT_REVIEW_REQUIRED",
+          resource,
         },
+        select: { id: true },
       });
+
+      // Paystack may redeliver a charge.success event. Keep one review
+      // record per payment reference rather than flooding the dashboard.
+      if (!existingReview) {
+        await logActivity({
+          systemSource: "paystack_webhook",
+          action: "PAYMENT_REVIEW_REQUIRED",
+          resource,
+          metadata: {
+            reference: event.data.reference,
+            reason: err.message,
+            verificationState: "PAYSTACK_VERIFIED",
+          },
+        });
+      }
       return NextResponse.json({ received: true, reviewRequired: true }, { status: 200 });
     }
 
