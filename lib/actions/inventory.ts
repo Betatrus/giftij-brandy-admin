@@ -3,7 +3,6 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { canViewFinancials, hasPermission } from "@/lib/permissions";
-import { logActivity } from "@/lib/activity-log";
 
 import {
   adjustStockSchema,
