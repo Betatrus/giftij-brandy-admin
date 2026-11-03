@@ -411,24 +411,34 @@ export async function completeOrder(
     "COMPLETED"
   );
 
-  await prisma.$transaction([
-    prisma.order.update({
+  await prisma.$transaction(async (tx) => {
+    // A paid order awaiting stock resolution must never be marked complete.
+    // The conditional update also protects against a concurrent cancellation
+    // or stock-resolution change between the initial read and this write.
+    const changed = await tx.order.updateMany({
       where: {
         id,
+        status: "PROCESSING",
+        stockUnavailable: false,
       },
-
       data: {
         status: "DELIVERED",
       },
-    }),
+    });
 
-    prisma.orderEvent.create({
+    if (changed.count !== 1) {
+      throw new Error(
+        "This order cannot be completed. Confirm that it is processing and all required stock has been allocated.",
+      );
+    }
+
+    await tx.orderEvent.create({
       data: {
         orderId: id,
         label: "Order Completed",
       },
-    }),
-  ]);
+    });
+  });
 
   await logActivity({
     userId: session.user.id,
