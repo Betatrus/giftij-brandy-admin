@@ -27,13 +27,14 @@ export function CustomerReturnsReportView() {
       {report.rows.length === 0 ? <p className="rounded-xl bg-white p-8 text-center text-sm text-ink/50">No customer returns have been recorded.</p> : (
         <div className="overflow-x-auto rounded-xl bg-white shadow-soft">
           <table className="w-full text-left text-sm">
-            <thead className="border-b border-cream text-xs text-ink/50"><tr><th className="p-3">Date / Order</th><th className="p-3">Customer</th><th className="p-3">Product</th><th className="p-3">Returned</th><th className="p-3">Restocked</th><th className="p-3">Refund</th><th className="p-3">Recorded by</th></tr></thead>
+            <thead className="border-b border-cream text-xs text-ink/50"><tr><th className="p-3">Date / Order</th><th className="p-3">Customer</th><th className="p-3">Product</th><th className="p-3">Returned</th><th className="p-3">Restocked</th><th className="p-3">Refund status</th><th className="p-3">Refund amount</th><th className="p-3">Recorded by</th></tr></thead>
             <tbody>
               {report.rows.map((row) => <tr key={row.id} className="border-b border-cream/70 last:border-0">
                 <td className="p-3 whitespace-nowrap">{new Date(row.date).toLocaleDateString("en-NG")}<span className="block text-xs text-ink/50">{row.orderNumber}</span></td>
                 <td className="p-3">{row.customerName}<span className="block text-xs text-ink/50">{row.customerEmail}</span></td>
                 <td className="p-3">{row.productName}{row.variant ? ` · ${row.variant}` : ""}<span className="block text-xs text-ink/50">{row.sku}</span></td>
                 <td className="p-3">{row.quantity}</td><td className="p-3">{row.restockQuantity}</td>
+                <td className="p-3 whitespace-nowrap">{row.refundStatus === "COMPLETED" ? "Completed" : row.refundStatus === "PENDING" ? "Pending" : "Not required"}</td>
                 <td className="p-3 whitespace-nowrap">{row.refundAmount === null ? "—" : `₦${row.refundAmount.toLocaleString("en-NG", { minimumFractionDigits: 2 })}`}</td>
                 <td className="p-3">{row.processedBy}</td>
               </tr>)}
