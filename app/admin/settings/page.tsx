@@ -3,11 +3,14 @@ import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 import { ChangePasswordForm } from "@/components/admin/settings/change-password-form";
 import { CustomerCareWhatsAppForm } from "@/components/admin/settings/customer-care-whatsapp-form";
+import { BlogVisibilityForm } from "@/components/admin/settings/blog-visibility-form";
+import { getStoreSettings } from "@/lib/actions/settings";
 
 export default async function SettingsPage() {
   const session = await auth();
   const isSuperAdmin = session?.user?.role === "SUPER_ADMIN";
   const whatsapp = isSuperAdmin ? await getCustomerCareWhatsApp() : null;
+  const storeSettings = isSuperAdmin ? await getStoreSettings() : null;
 
   return (
     <div>
