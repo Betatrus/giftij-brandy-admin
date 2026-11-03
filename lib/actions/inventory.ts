@@ -347,7 +347,8 @@ export async function completeCustomerRefund(returnId: string) {
   if (!hasPermission(session.user.role, "inventory:write")) {
     throw new Error("FORBIDDEN: you do not have permission to complete customer refunds");
   }
-  const id = z.string().min(1).parse(returnId);
+  if (typeof returnId !== "string" || returnId.trim().length === 0) throw new Error("A valid return record is required.");
+  const id = returnId.trim();
   const result = await prisma.$transaction(async (tx) => {
     const updated = await tx.customerReturn.updateMany({
       where: { id, refundStatus: "PENDING" },
