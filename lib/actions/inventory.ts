@@ -59,6 +59,14 @@ async function requireSession() {
   return session;
 }
 
+async function requireInventoryRead() {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:read")) {
+    throw new Error("FORBIDDEN: you do not have permission to view inventory");
+  }
+  return session;
+}
+
 type StockRecord = {
   currentStock: number;
   reservedStock: number;
@@ -663,7 +671,7 @@ export async function listInventory(
     pageSize?: number;
   },
 ) {
-  await requireSession();
+  await requireInventoryRead();
 
   const {
     skip,
@@ -910,7 +918,7 @@ export async function listInventory(
 export async function getInventoryHistory(
   productId: string,
 ) {
-  await requireSession();
+  await requireInventoryRead();
 
   const inventory =
     await prisma.inventory.findUniqueOrThrow(
@@ -962,7 +970,7 @@ export async function getInventoryHistory(
 export async function getVariantInventoryHistory(
   variantId: string,
 ) {
-  await requireSession();
+  await requireInventoryRead();
 
   const history =
     await prisma.variantInventoryLog.findMany(
@@ -1002,7 +1010,7 @@ export async function getVariantInventoryHistory(
 }
 
 export async function getLowStockCount() {
-  await requireSession();
+  await requireInventoryRead();
 
   const [
     baseInventories,
