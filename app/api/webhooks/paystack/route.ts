@@ -146,33 +146,69 @@ async function verifySuccessfulTransaction(
   }
 }
 
-function parseCartFromMetadata(
-  data: PaystackWebhookEvent["data"],
-): CartLine[] {
-  const cart =
-    data.metadata?.cart;
+type CheckoutPriceSnapshot = {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  unitPrice: number;
+};
 
-  if (
-    !Array.isArray(cart) ||
-    cart.length === 0
-  ) {
-    throw new Error(
-      "Webhook payload has no metadata.cart and order items cannot be reconstructed.",
-    );
+function getValidatedPriceSnapshots(
+  data: PaystackWebhookEvent["data"],
+): CheckoutPriceSnapshot[] {
+  const cart = data.metadata?.cart;
+
+  if (!Array.isArray(cart) || cart.length === 0) {
+    throw new InvalidVerifiedPaymentError("Payment metadata has no checkout cart.");
   }
 
-  return cart.map(
-    (line) => ({
-      productId:
-        line.productId,
+  const seen = new Set<string>();
+  return cart.map((line) => {
+    if (
+      !line || typeof line.productId !== "string" || !line.productId.trim() ||
+      !(line.variantId === undefined || line.variantId === null || (typeof line.variantId === "string" && line.variantId.trim())) ||
+      !Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
+      typeof line.unitPrice !== "number" || !Number.isFinite(line.unitPrice) || line.unitPrice < 0
+    ) {
+      throw new InvalidVerifiedPaymentError("Payment metadata contains an invalid cart or price snapshot.");
+    }
 
-      variantId:
-        line.variantId ??
-        null,
+    const variantId = line.variantId ?? null;
+    const key = `${line.productId}:${variantId ?? ""}`;
+    if (seen.has(key)) {
+      throw new InvalidVerifiedPaymentError("Payment metadata contains duplicate product lines.");
+    }
+    seen.add(key);
 
-      quantity:
-        line.quantity,
-    }),
+    return {
+      productId: line.productId,
+      variantId,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice,
+    };
+  });
+}
+
+function normalizeCartForComparison(
+  lines: Array<{ productId: string; variantId?: string | null; quantity: number }>,
+): CartLine[] {
+  const grouped = new Map<string, CartLine>();
+  for (const line of lines) {
+    if (
+      typeof line.productId !== "string" || !line.productId ||
+      !(line.variantId === undefined || line.variantId === null || typeof line.variantId === "string") ||
+      !Number.isSafeInteger(line.quantity) || line.quantity <= 0
+    ) {
+      throw new InvalidVerifiedPaymentError("Checkout reservation contains an invalid cart line.");
+    }
+    const variantId = line.variantId ?? null;
+    const key = `${line.productId}:${variantId ?? ""}`;
+    const current = grouped.get(key);
+    if (current) current.quantity += line.quantity;
+    else grouped.set(key, { productId: line.productId, variantId, quantity: line.quantity });
+  }
+  return Array.from(grouped.values()).sort((a, b) =>
+    `${a.productId}:${a.variantId ?? ""}`.localeCompare(`${b.productId}:${b.variantId ?? ""}`),
   );
 }
 
@@ -471,10 +507,12 @@ async function handleChargeSuccess(
       },
     );
 
-  const cartLines =
-    parseCartFromMetadata(
-      data,
-    );
+  const priceSnapshots = getValidatedPriceSnapshots(data);
+  // For a reservation-backed checkout, the database reservation—not
+  // mutable webhook metadata—is authoritative for products, variants and quantities.
+  const metadataCartLines: CartLine[] = priceSnapshots.map(({ productId, variantId, quantity }) => ({
+    productId, variantId, quantity,
+  }));
 
   const products =
     await prisma.product.findMany(
@@ -511,57 +549,19 @@ async function handleChargeSuccess(
   let subtotal = 0;
   let costBasis = 0;
 
-  const effectiveUnitPriceByLine =
-    new Map<
-      string,
-      number
-    >();
+  const effectiveUnitPriceByLine = new Map<string, number>();
 
-  for (
-    const line of
-    cartLines
-  ) {
-    const product =
-      productById.get(
-        line.productId,
-      );
-
+  // Prices must come from the server-calculated checkout snapshots. Falling
+  // back to today's product price could silently change a paid order's value.
+  for (const snapshot of priceSnapshots) {
+    const product = productById.get(snapshot.productId);
     if (!product) {
-      throw new Error(
-        `Cart references unknown product ${line.productId}`,
-      );
+      throw new InvalidVerifiedPaymentError(`Cart references unknown product ${snapshot.productId}`);
     }
-
-    const priceSnapshot = data.metadata?.cart?.find(
-      (snapshot) =>
-        snapshot.productId === line.productId &&
-        (snapshot.variantId ?? null) === (line.variantId ?? null),
-    )?.unitPrice;
-
-    const effectiveUnitPrice =
-      typeof priceSnapshot === "number" &&
-      Number.isFinite(priceSnapshot) &&
-      priceSnapshot >= 0
-        ? priceSnapshot
-        : computeEffectivePrice(
-            Number(product.price),
-            product.discount ? Number(product.discount) : 0,
-          );
-
     effectiveUnitPriceByLine.set(
-      `${line.productId}:${line.variantId ?? ""}`,
-      effectiveUnitPrice,
+      `${snapshot.productId}:${snapshot.variantId ?? ""}`,
+      snapshot.unitPrice,
     );
-
-    subtotal +=
-      effectiveUnitPrice *
-      line.quantity;
-
-    costBasis +=
-      Number(
-        product.costPrice,
-      ) *
-      line.quantity;
   }
 
   const orderNumber =
@@ -597,6 +597,51 @@ async function handleChargeSuccess(
             tx,
             data.reference,
           );
+
+        const cartLines = reservationResult.consumed
+          ? normalizeCartForComparison(reservationResult.cart)
+          : normalizeCartForComparison(metadataCartLines);
+
+        if (reservationResult.consumed) {
+          if (data.metadata?.reservationId && data.metadata.reservationId !== reservationResult.reservationId) {
+            throw new InvalidVerifiedPaymentError("Payment reservation ID does not match the attached checkout reservation.");
+          }
+          const reservedCart = normalizeCartForComparison(reservationResult.cart);
+          const metadataCart = normalizeCartForComparison(metadataCartLines);
+          if (
+            reservedCart.length !== metadataCart.length ||
+            reservedCart.some((line, index) =>
+              line.productId !== metadataCart[index]?.productId ||
+              (line.variantId ?? null) !== (metadataCart[index]?.variantId ?? null) ||
+              line.quantity !== metadataCart[index]?.quantity
+            )
+          ) {
+            throw new InvalidVerifiedPaymentError("Payment cart does not match the reserved checkout cart.");
+          }
+        }
+
+        for (const line of cartLines) {
+          const key = `${line.productId}:${line.variantId ?? ""}`;
+          if (!effectiveUnitPriceByLine.has(key)) {
+            throw new InvalidVerifiedPaymentError("A reserved cart line has no matching checkout price snapshot.");
+          }
+          const snapshot = priceSnapshots.find((item) =>
+            item.productId === line.productId && item.variantId === (line.variantId ?? null)
+          );
+          if (!snapshot) {
+            throw new InvalidVerifiedPaymentError("A reserved cart line has no matching checkout price snapshot.");
+          }
+          subtotal += snapshot.unitPrice * line.quantity;
+          const product = productById.get(line.productId);
+          if (!product) throw new InvalidVerifiedPaymentError(`Cart references unknown product ${line.productId}`);
+          costBasis += Number(product.costPrice) * line.quantity;
+        }
+
+        if (!Number.isSafeInteger(Math.round(subtotal * 100)) ||
+            Math.round(subtotal * 100) !== data.amount ||
+            Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo)) {
+          throw new InvalidVerifiedPaymentError("Checkout cart subtotal does not match the verified Paystack amount.");
+        }
 
         /**
          * Compatibility / safety fallback.
