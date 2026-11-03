@@ -287,6 +287,7 @@ export async function getCustomerReturnsReport() {
     quantity: entry.quantity,
     restockQuantity: entry.restockQuantity,
     refundAmount: !canSeeFinancials || entry.refundAmount === null ? null : Number(entry.refundAmount),
+    refundStatus: entry.refundStatus,
     note: entry.note ?? "",
     processedBy: entry.processedBy.name || entry.processedBy.email,
   }));
