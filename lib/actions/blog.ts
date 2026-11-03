@@ -39,6 +39,13 @@ export async function saveBlogPost(input: {
   const title = required(input.title, "Title", 120);
   const slug = slugify(input.slug || title);
   const excerpt = required(input.excerpt, "Excerpt", 320);
+  const coverImageUrl = input.coverImageUrl?.trim() || null;
+  if (coverImageUrl) {
+    let imageUrl: URL;
+    try { imageUrl = new URL(coverImageUrl); } catch { throw new Error("Cover image URL must be a valid absolute URL."); }
+    if (imageUrl.protocol !== "https:") throw new Error("Cover image URL must use HTTPS.");
+  }
+  if (input.coverImageAlt && input.coverImageAlt.length > 180) throw new Error("Cover image alt text must be 180 characters or fewer.");
   const contentMarkdown = required(input.contentMarkdown, "Article content", 50000);
   if (!slug) throw new Error("A valid URL slug is required.");
   const collision = await prisma.blogPost.findUnique({ where: { slug }, select: { id: true } });
@@ -70,7 +77,7 @@ export async function saveBlogPost(input: {
     const data = {
       title, slug, excerpt, contentMarkdown, type: input.type, status,
       categoryId: input.categoryId || null, tags,
-      coverImageUrl: input.coverImageUrl?.trim() || null,
+      coverImageUrl,
       coverImageAlt: input.coverImageAlt?.trim() || null,
       seoTitle: input.seoTitle?.trim() || null,
       seoDescription: input.seoDescription?.trim() || null,
@@ -99,6 +106,7 @@ export async function createBlogCategory(input: { name: string; description?: st
   const session = await requireEditor();
   const name = required(input.name, "Category name", 60);
   const base = slugify(name);
+  if (!base) throw new Error("Category name must include letters or numbers.");
   let slug = base;
   let suffix = 2;
   while (await prisma.blogCategory.findUnique({ where: { slug }, select: { id: true } })) slug = `${base}-${suffix++}`;

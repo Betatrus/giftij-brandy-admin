@@ -102,7 +102,7 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
     </section>
     <section className="rounded-2xl bg-white p-5 md:p-6 shadow-soft space-y-4">
       <h2 className="font-medium text-sm">Search appearance</h2>
-      <div><label className={labelClass}>SEO page title (recommended 50–60 characters)</label><input className={inputClass} value={seoTitle} onChange={e=>setSeoTitle(e.target.value)} maxLength={70} placeholder={title || "Primary search phrase | Giftij Brandy"} /><p className="mt-1 text-xs text-ink/45">{seoTitle.length}/70 characters</p></div>
+      <div><label className={labelClass}>SEO page title (recommended 50–60 characters; Giftij Brandy is appended automatically)</label><input className={inputClass} value={seoTitle} onChange={e=>setSeoTitle(e.target.value)} maxLength={70} placeholder={title || "Shop handbags online in Nigeria"} /><p className="mt-1 text-xs text-ink/45">{seoTitle.length}/70 characters</p></div>
       <div><label className={labelClass}>Meta description (recommended 140–160 characters)</label><textarea className={inputClass} rows={2} value={seoDescription} onChange={e=>setSeoDescription(e.target.value)} maxLength={170} /><p className="mt-1 text-xs text-ink/45">{seoDescription.length}/170 characters</p></div>
       <div><label className={labelClass}>Canonical URL (optional)</label><input className={inputClass} type="url" value={canonicalUrl} onChange={e=>setCanonicalUrl(e.target.value)} placeholder="Leave blank to use the article URL" /></div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={featured} onChange={e=>setFeatured(e.target.checked)} /> Feature this article</label>
