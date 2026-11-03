@@ -84,6 +84,7 @@ export const adjustStockSchema = z
     productId: z.string().min(1),
     ...commonAdjustmentFields,
   })
+  .refine((data) => data.adjustmentReason !== "CUSTOMER_RETURN", { message: "Customer returns must be recorded against the original order item.", path: ["adjustmentReason"] })
   .refine(reasonMatchesChangeType, {
     message:
       "The selected reason does not match this stock action.",
@@ -120,6 +121,7 @@ export const adjustVariantStockSchema = z
     variantId: z.string().min(1),
     ...commonAdjustmentFields,
   })
+  .refine((data) => data.adjustmentReason !== "CUSTOMER_RETURN", { message: "Customer returns must be recorded against the original order item.", path: ["adjustmentReason"] })
   .refine(reasonMatchesChangeType, {
     message:
       "The selected reason does not match this stock action.",
@@ -158,6 +160,7 @@ const bulkAdjustmentLineSchema = z
     productId: z.string().min(1),
     ...commonAdjustmentFields,
   })
+  .refine((data) => data.adjustmentReason !== "CUSTOMER_RETURN", { message: "Customer returns must be recorded against the original order item.", path: ["adjustmentReason"] })
   .refine(reasonMatchesChangeType, {
     message:
       "The selected reason does not match this stock action.",
