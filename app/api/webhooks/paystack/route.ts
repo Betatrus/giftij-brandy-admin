@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity-log";
 import {
   findOrCreateCustomerByEmail,
+  findOrCreateCustomerByEmailInTransaction,
   recordCustomerEvent,
 } from "@/lib/customers/identity";
 import {
@@ -520,23 +521,8 @@ async function handleChargeSuccess(
       data,
     );
 
-  const customer =
-    await findOrCreateCustomerByEmail(
-      {
-        email,
-        name,
-        phone,
-
-        address:
-          shippingAddress
-            ? (shippingAddress as Prisma.InputJsonValue)
-            : undefined,
-
-        country:
-          country ??
-          undefined,
-      },
-    );
+  // Customer creation/profile updates are deferred until all reservation,
+  // cart and price checks pass, then committed atomically with the order.
   // For a reservation-backed checkout, the database reservation—not
   // mutable webhook metadata—is authoritative for products, variants and quantities.
   const metadataCartLines: CartLine[] = priceSnapshots.map(({ productId, variantId, quantity }) => ({
@@ -673,6 +659,19 @@ async function handleChargeSuccess(
           throw new InvalidVerifiedPaymentError("Checkout cart subtotal does not match the verified Paystack amount.");
         }
 
+        const customer = await findOrCreateCustomerByEmailInTransaction(
+          tx,
+          {
+            email,
+            name,
+            phone,
+            address: shippingAddress
+              ? (shippingAddress as Prisma.InputJsonValue)
+              : undefined,
+            country: country ?? undefined,
+          },
+        );
+
         /**
          * Compatibility / safety fallback.
          *
@@ -767,6 +766,11 @@ async function handleChargeSuccess(
           });
         }
 
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { lastPurchase: new Date() },
+        });
+
         return {
           order: created,
           usedReservation: reservationResult.consumed,
@@ -778,20 +782,6 @@ async function handleChargeSuccess(
   if (order.alreadyProcessed) {
     return;
   }
-
-  await prisma.customer.update(
-    {
-      where: {
-        id:
-          customer.id,
-      },
-
-      data: {
-        lastPurchase:
-          new Date(),
-      },
-    },
-  );
 
   await logActivity({
     systemSource:
