@@ -121,12 +121,13 @@ async function verifySuccessfulTransaction(
   data: PaystackWebhookEvent["data"],
 ): Promise<void> {
   const secret = process.env.PAYSTACK_SECRET_KEY;
-  const expectedAmount = data.metadata?.expectedAmountKobo;
 
-  if (!secret || !Number.isSafeInteger(expectedAmount) || Number(expectedAmount) <= 0) {
-    throw new Error("Missing server-calculated expected payment amount.");
+  if (!secret) {
+    throw new Error("Paystack verification is not configured.");
   }
 
+  // Verify the provider record first. Missing or malformed checkout metadata
+  // must not cause a verified successful payment to retry forever.
   const response = await fetch(
     `https://api.paystack.co/transaction/verify/${encodeURIComponent(data.reference)}`,
     {
@@ -139,16 +140,31 @@ async function verifySuccessfulTransaction(
     | { status?: boolean; data?: { reference?: string; status?: string; amount?: number; currency?: string } }
     | null;
   const verified = payload?.data;
-  const expected = Number(expectedAmount);
 
   if (
     !response.ok || payload?.status !== true || verified?.status !== "success" ||
-    verified.reference !== data.reference || verified.amount !== expected ||
-    data.amount !== expected || verified.currency !== "NGN" ||
-    (data.currency ?? "NGN") !== "NGN"
+    verified.reference !== data.reference ||
+    !Number.isSafeInteger(verified.amount) || verified.amount !== data.amount ||
+    verified.currency !== "NGN" || (data.currency ?? "NGN") !== "NGN"
   ) {
     throw new PaymentVerificationMismatchError(
       "Paystack transaction verification did not match this checkout.",
+    );
+  }
+
+  const expectedAmount = data.metadata?.expectedAmountKobo;
+  if (
+    !Number.isSafeInteger(expectedAmount) ||
+    Number(expectedAmount) <= 0
+  ) {
+    throw new PaymentReviewRequiredError(
+      "Paystack verified the payment, but the server-calculated checkout amount is missing or invalid.",
+    );
+  }
+
+  if (verified.amount !== Number(expectedAmount)) {
+    throw new PaymentVerificationMismatchError(
+      "Verified Paystack amount does not match the server-calculated checkout amount.",
     );
   }
 }
@@ -426,28 +442,35 @@ export async function POST(
     // are copied into the admin review queue.
     if (err instanceof PaymentReviewRequiredError) {
       const resource = `PaystackReference:${event.data.reference}`;
-      const existingReview = await prisma.activityLog.findFirst({
-        where: {
-          action: "PAYMENT_REVIEW_REQUIRED",
-          resource,
-        },
-        select: { id: true },
-      });
 
-      // Paystack may redeliver a charge.success event. Keep one review
-      // record per payment reference rather than flooding the dashboard.
-      if (!existingReview) {
-        await logActivity({
-          systemSource: "paystack_webhook",
-          action: "PAYMENT_REVIEW_REQUIRED",
-          resource,
-          metadata: {
-            reference: event.data.reference,
-            reason: err.message,
-            verificationState: "PAYSTACK_VERIFIED",
+      // Serialize review creation per reference across serverless instances.
+      // The lock + existence check + insert share one transaction, so
+      // concurrent Paystack redeliveries cannot create duplicate review rows.
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))`;
+        const existingReview = await tx.activityLog.findFirst({
+          where: {
+            action: "PAYMENT_REVIEW_REQUIRED",
+            resource,
           },
+          select: { id: true },
         });
-      }
+
+        if (!existingReview) {
+          await tx.activityLog.create({
+            data: {
+              systemSource: "paystack_webhook",
+              action: "PAYMENT_REVIEW_REQUIRED",
+              resource,
+              metadata: {
+                reference: event.data.reference,
+                reason: err.message,
+                verificationState: "PAYSTACK_VERIFIED",
+              },
+            },
+          });
+        }
+      });
       return NextResponse.json({ received: true, reviewRequired: true }, { status: 200 });
     }
 
