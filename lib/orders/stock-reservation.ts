@@ -727,6 +727,7 @@ export async function consumeCheckoutReservation(
     return {
       consumed: false,
       cart: lines,
+      reservationId: reservation.id,
     };
   }
 
@@ -756,6 +757,7 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart:
         lines,
+      reservationId: reservation.id,
     };
   }
 
