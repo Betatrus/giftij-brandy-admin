@@ -448,6 +448,168 @@ export async function completeOrder(
 }
 
 /**
+ * Allocate inventory for a paid order that could not claim stock when
+ * Paystack confirmed payment. Stock must already have been received through
+ * the normal inventory receiving workflow before this action is used.
+ *
+ * The order row and stock rows are locked in one transaction. The stock flag
+ * is cleared only after every line has been allocated successfully.
+ */
+export async function resolveStockUnavailableOrder(id: string) {
+  const session = await requireSession();
+
+  if (
+    !hasPermission(session.user.role, "orders:write") ||
+    !hasPermission(session.user.role, "inventory:write")
+  ) {
+    throw new Error("FORBIDDEN: order and inventory permissions are required to allocate stock.");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE
+    `;
+    if (!lockedOrder.length) throw new Error("Order not found.");
+
+    const order = await tx.order.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        stockUnavailable: true,
+        cancellationReviewStatus: true,
+        items: {
+          select: { id: true, productId: true, variantId: true, quantity: true },
+        },
+      },
+    });
+
+    if (!order.stockUnavailable) {
+      throw new Error("This order has already been allocated or does not require stock resolution.");
+    }
+    if (!["PENDING", "PROCESSING"].includes(order.status)) {
+      throw new Error("Only active paid orders can have stock allocated.");
+    }
+    if (order.cancellationReviewStatus === "REQUESTED" || order.cancellationReviewStatus === "APPROVED") {
+      throw new Error("Resolve or reject the cancellation review before allocating stock.");
+    }
+    if (order.items.length === 0) throw new Error("This order has no items to allocate.");
+
+    const grouped = new Map<string, { productId: string; variantId: string | null; quantity: number }>();
+    for (const item of order.items) {
+      const key = item.variantId ? `variant:${item.variantId}` : `product:${item.productId}`;
+      const existing = grouped.get(key);
+      if (existing) existing.quantity += item.quantity;
+      else grouped.set(key, { productId: item.productId, variantId: item.variantId, quantity: item.quantity });
+    }
+    const lines = [...grouped.values()].sort((a, b) =>
+      (a.variantId ? `variant:${a.variantId}` : `product:${a.productId}`).localeCompare(
+        b.variantId ? `variant:${b.variantId}` : `product:${b.productId}`,
+      ),
+    );
+
+    // Lock every required stock row first and validate the complete order.
+    for (const line of lines) {
+      if (line.variantId) {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "ProductVariant" WHERE "id" = ${line.variantId} AND "productId" = ${line.productId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error(`A required product variant no longer exists (${line.variantId}).`);
+        const variant = await tx.productVariant.findUniqueOrThrow({
+          where: { id: line.variantId },
+          select: { currentStock: true },
+        });
+        if (variant.currentStock < line.quantity) {
+          throw new Error(`Insufficient stock for variant ${line.variantId}: need ${line.quantity}, available ${variant.currentStock}. Receive the missing stock first.`);
+        }
+      } else {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "Inventory" WHERE "productId" = ${line.productId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error(`Inventory record not found for product ${line.productId}.`);
+        const inventory = await tx.inventory.findUniqueOrThrow({
+          where: { productId: line.productId },
+          select: { currentStock: true },
+        });
+        if (inventory.currentStock < line.quantity) {
+          throw new Error(`Insufficient stock for product ${line.productId}: need ${line.quantity}, available ${inventory.currentStock}. Receive the missing stock first.`);
+        }
+      }
+    }
+
+    // All lines are available and locked. Deduct them atomically.
+    for (const line of lines) {
+      if (line.variantId) {
+        const updated = await tx.productVariant.updateMany({
+          where: { id: line.variantId, productId: line.productId, currentStock: { gte: line.quantity } },
+          data: { currentStock: { decrement: line.quantity }, soldStock: { increment: line.quantity } },
+        });
+        if (updated.count !== 1) throw new Error("Stock changed while allocating this order. No allocation was committed; refresh and try again.");
+        await tx.variantInventoryLog.create({
+          data: {
+            variantId: line.variantId,
+            changeType: "DECREASE",
+            quantity: line.quantity,
+            reason: `[ONLINE_SALE][STOCK_RESOLUTION] Paid order ${order.orderNumber}`,
+            performedById: session.user.id,
+          },
+        });
+      } else {
+        const updated = await tx.inventory.updateMany({
+          where: { productId: line.productId, currentStock: { gte: line.quantity } },
+          data: { currentStock: { decrement: line.quantity }, soldStock: { increment: line.quantity } },
+        });
+        if (updated.count !== 1) throw new Error("Stock changed while allocating this order. No allocation was committed; refresh and try again.");
+        const inventory = await tx.inventory.findUniqueOrThrow({
+          where: { productId: line.productId },
+          select: { id: true },
+        });
+        await tx.inventoryLog.create({
+          data: {
+            inventoryId: inventory.id,
+            changeType: "DECREASE",
+            quantity: line.quantity,
+            reason: `[ONLINE_SALE][STOCK_RESOLUTION] Paid order ${order.orderNumber}`,
+            performedById: session.user.id,
+          },
+        });
+      }
+    }
+
+    await tx.order.update({
+      where: { id },
+      data: { stockUnavailable: false },
+    });
+    await tx.orderNote.create({
+      data: {
+        orderId: id,
+        note: `STOCK RESOLVED: Full order quantity allocated from received inventory by ${session.user.name}.`,
+        createdBy: session.user.id,
+      },
+    });
+    await tx.orderEvent.create({
+      data: { orderId: id, label: "Stock Allocated — Order Ready for Fulfilment" },
+    });
+
+    return { orderNumber: order.orderNumber, itemCount: order.items.length };
+  });
+
+  await logActivity({
+    userId: session.user.id,
+    action: "ORDER_STOCK_UNAVAILABLE_RESOLVED",
+    resource: `Order:${id}`,
+    metadata: { orderNumber: result.orderNumber, itemCount: result.itemCount, stockAllocated: true },
+  });
+
+  revalidatePath("/admin/orders");
+  revalidatePath(`/admin/orders/${id}`);
+  revalidatePath("/admin/inventory");
+  revalidateTag("orders");
+  revalidateTag("products");
+}
+
+/**
  * Cancels an order and restores its inventory.
  */
 export async function cancelOrder(
