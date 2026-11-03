@@ -27,9 +27,19 @@ async function requireReportsAccess() {
  * from this total" instead of silently under-reporting.
  */
 export async function getSalesReport(filters: ReportFiltersInput) {
-  await requireReportsAccess();
+  const session = await requireReportsAccess();
+  const canSeeFinancials = hasPermission(session.user.role, "reports:read:financials");
   const parsed = reportFiltersSchema.parse(filters);
-  const { lines, truncated, unknownRevenueCount } = await getUnifiedSalesLines(parsed);
+  const { lines: rawLines, truncated, unknownRevenueCount } = await getUnifiedSalesLines(parsed);
+  // Refund cash amounts are restricted just like the dedicated returns report.
+  const lines = rawLines.map((line) => ({
+    ...line,
+    actualRefundAmount: canSeeFinancials ? line.actualRefundAmount : null,
+    returnDetails: line.returnDetails.map((entry) => ({
+      ...entry,
+      refundAmount: canSeeFinancials ? entry.refundAmount : null,
+    })),
+  }));
 
   const summary = {
     lineCount: lines.length,
