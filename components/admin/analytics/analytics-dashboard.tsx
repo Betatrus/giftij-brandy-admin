@@ -384,7 +384,14 @@ export function AnalyticsDashboard({
               <MetricCard label="Return Records" value={data.customerReturns.recordCount.toLocaleString("en-NG")} />
               <MetricCard label="Units Returned" value={data.customerReturns.unitsReturned.toLocaleString("en-NG")} />
               <MetricCard label="Units Restocked" value={data.customerReturns.unitsRestocked.toLocaleString("en-NG")} />
-              {data.customerReturns.refundAmount !== null && <MetricCard label="Refunds Recorded" value={formatNaira(data.customerReturns.refundAmount)} />}
+              <MetricCard label="Completed Refunds" value={data.customerReturns.completedRefundCount.toLocaleString("en-NG")} />
+              <MetricCard label="Pending Refunds" value={data.customerReturns.pendingRefundCount.toLocaleString("en-NG")} />
+              {data.customerReturns.completedRefundAmount !== null && (
+                <MetricCard label="Refunds Completed" value={formatNaira(data.customerReturns.completedRefundAmount)} />
+              )}
+              {data.customerReturns.pendingRefundAmount !== null && (
+                <MetricCard label="Pending Refund Value" value={formatNaira(data.customerReturns.pendingRefundAmount)} />
+              )}
             </div>
           </section>
 
