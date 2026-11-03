@@ -2,7 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { hasPermission } from "@/lib/permissions";
+import { canViewFinancials, hasPermission } from "@/lib/permissions";
 import { logActivity } from "@/lib/activity-log";
 
 import {
@@ -223,6 +223,10 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
   const session = await requireSession();
   if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to record customer returns");
   const parsed = recordCustomerReturnSchema.parse(input);
+  const canRecordRefundAmount = canViewFinancials(session.user.role);
+  if (!canRecordRefundAmount && parsed.refundAmount !== undefined) {
+    throw new Error("FORBIDDEN: refund amounts are restricted to Super Admin.");
+  }
   const businessDate = new Date(parsed.businessDate + "T00:00:00.000Z");
   if (Number.isNaN(businessDate.getTime()) || businessDate.toISOString().slice(0, 10) !== parsed.businessDate || parsed.businessDate > new Date().toISOString().slice(0, 10)) {
     throw new Error("Return date must be valid and cannot be in the future.");
@@ -284,13 +288,14 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
     const record = await tx.customerReturn.create({
       data: { orderId: item.orderId, orderItemId: item.id, quantity: parsed.quantity,
         restockQuantity: parsed.restockQuantity, refundAmount: parsed.refundAmount,
+        refundStatus: parsed.refundStatus,
         businessDate, note: parsed.note?.trim() || null, processedById: session.user.id },
     });
     await tx.customerEvent.create({
       data: { customerId: item.order.customerId, label: "Customer return recorded",
         metadata: { orderNumber: item.order.orderNumber, productName: item.product.name,
           variant: item.variant?.value ?? null, quantity: parsed.quantity,
-          restockQuantity: parsed.restockQuantity, refundAmount: parsed.refundAmount ?? null } },
+          restockQuantity: parsed.restockQuantity, refundStatus: parsed.refundStatus } },
     });
     return { record, item };
   });
@@ -301,7 +306,7 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
     metadata: { orderNumber: result.item.order.orderNumber, orderItemId: result.item.id,
       productName: result.item.product.name, variant: result.item.variant?.value ?? null,
       quantityReturned: parsed.quantity, quantityRestocked: parsed.restockQuantity,
-      refundAmount: parsed.refundAmount ?? null, businessDate: parsed.businessDate, note: parsed.note ?? null },
+      refundStatus: parsed.refundStatus, ...(canRecordRefundAmount ? { refundAmount: parsed.refundAmount ?? null } : {}), businessDate: parsed.businessDate, note: parsed.note ?? null },
   });
   revalidateInventory();
   revalidatePath("/admin/reports");
@@ -325,6 +330,7 @@ export async function listReturnableOrderItems() {
     },
   });
   return items.map((item) => ({
+    canRecordRefundAmount: canViewFinancials(session.user.role),
     orderItemId: item.id,
     orderNumber: item.order.orderNumber,
     orderDate: item.order.createdAt,
