@@ -642,8 +642,8 @@ export async function cancelOrder(
     select: { id: true, status: true, cancellationReviewStatus: true },
   });
 
-  if (existing.status === "CANCELLED") {
-    throw new Error("This order is already cancelled.");
+  if (!["PENDING", "PROCESSING"].includes(existing.status)) {
+    throw new Error("Only active pending or processing orders can enter cancellation review.");
   }
   if (existing.cancellationReviewStatus === "REQUESTED") {
     throw new Error("A cancellation review is already pending for this order.");
@@ -651,15 +651,25 @@ export async function cancelOrder(
 
   // This action only starts a review. It must never cancel, refund, or
   // restore inventory by itself; those are separate approved operations.
+  // The conditional update prevents stale tabs or concurrent requests from
+  // reopening a completed/cancelled order or creating duplicate reviews.
   await prisma.$transaction(async (tx) => {
-    await tx.order.update({
-      where: { id },
+    const changed = await tx.order.updateMany({
+      where: {
+        id,
+        status: { in: ["PENDING", "PROCESSING"] },
+        cancellationReviewStatus: { in: ["NONE", "REJECTED"] },
+      },
       data: {
         cancellationReviewStatus: "REQUESTED",
         cancellationRequestedAt: new Date(),
         cancellationRequestedBy: session.user.id,
       },
     });
+
+    if (changed.count !== 1) {
+      throw new Error("This order is no longer eligible for cancellation review.");
+    }
 
     await tx.orderNote.create({
       data: {
