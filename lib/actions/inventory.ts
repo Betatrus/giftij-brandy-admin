@@ -450,7 +450,7 @@ export async function adjustStock(
   // Lock the inventory row before reading stock. Checkout reservations update
   // this same row, so they serialize with manual adjustments instead of being
   // overwritten by a stale read.
-  const result = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "Inventory" WHERE "productId" = ${parsed.productId} FOR UPDATE
     `;
@@ -549,7 +549,7 @@ export async function adjustVariantStock(
 
   // Lock the variant row before reading stock. Reservations and adjustments
   // now serialize on the same database row.
-  const result = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "ProductVariant" WHERE "id" = ${parsed.variantId} FOR UPDATE
     `;
