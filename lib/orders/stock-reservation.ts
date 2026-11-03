@@ -617,6 +617,7 @@ export async function consumeCheckoutReservation(
 ): Promise<{
   consumed: boolean;
   cart: ReservationCartLine[];
+  reservationId: string | null;
 }> {
   const reservation =
     await tx.checkoutReservation.findUnique(
@@ -638,6 +639,7 @@ export async function consumeCheckoutReservation(
     return {
       consumed: false,
       cart: [],
+      reservationId: null,
     };
   }
 
@@ -654,6 +656,7 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart:
         lines,
+      reservationId: reservation.id,
     };
   }
 
