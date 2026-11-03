@@ -352,22 +352,19 @@ export async function markOrderProcessingOnView(
             "Order Viewed - now Processing",
         },
       });
+      await tx.activityLog.create({
+        data: {
+          userId: session.user.id,
+          action: "ORDER_STATUS_UPDATE",
+          resource: `Order:${id}`,
+          metadata: { from: "PENDING", to: "PROCESSING", trigger: "viewed" },
+        },
+      });
 
       return true;
     });
 
   if (changed) {
-    await logActivity({
-      userId: session.user.id,
-      action: "ORDER_STATUS_UPDATE",
-      resource: `Order:${id}`,
-      metadata: {
-        from: "PENDING",
-        to: "PROCESSING",
-        trigger: "viewed",
-      },
-    });
-
     revalidatePath("/admin/orders");
     revalidatePath(
       `/admin/orders/${id}`
@@ -439,16 +436,14 @@ export async function completeOrder(
         label: "Order Completed",
       },
     });
-  });
-
-  await logActivity({
-    userId: session.user.id,
-    action: "ORDER_STATUS_UPDATE",
-    resource: `Order:${id}`,
-    metadata: {
-      from,
-      to: "COMPLETED",
-    },
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_STATUS_UPDATE",
+        resource: `Order:${id}`,
+        metadata: { from, to: "COMPLETED" },
+      },
+    });
   });
 
   revalidatePath("/admin/orders");
@@ -694,17 +689,18 @@ export async function cancelOrder(
         label: "Cancellation Review Requested",
       },
     });
-  });
-
-  await logActivity({
-    userId: session.user.id,
-    action: "ORDER_CANCELLATION_REVIEW_REQUESTED",
-    resource: `Order:${id}`,
-    metadata: {
-      orderStatusUnchanged: existing.status,
-      inventoryRestored: false,
-      refundInitiated: false,
-    },
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_CANCELLATION_REVIEW_REQUESTED",
+        resource: `Order:${id}`,
+        metadata: {
+          orderStatusUnchanged: existing.status,
+          inventoryRestored: false,
+          refundInitiated: false,
+        },
+      },
+    });
   });
 
   revalidatePath("/admin/orders");
@@ -768,18 +764,19 @@ export async function resolveCancellationReview(
         label: decision === "APPROVE" ? "Cancellation Review Approved" : "Cancellation Review Rejected",
       },
     });
-  });
-
-  await logActivity({
-    userId: session.user.id,
-    action: decision === "APPROVE" ? "ORDER_CANCELLATION_REVIEW_APPROVED" : "ORDER_CANCELLATION_REVIEW_REJECTED",
-    resource: `Order:${id}`,
-    metadata: {
-      decision,
-      reason: cleanReason,
-      refundInitiated: false,
-      inventoryRestored: false,
-    },
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: decision === "APPROVE" ? "ORDER_CANCELLATION_REVIEW_APPROVED" : "ORDER_CANCELLATION_REVIEW_REJECTED",
+        resource: `Order:${id}`,
+        metadata: {
+          decision,
+          reason: cleanReason,
+          refundInitiated: false,
+          inventoryRestored: false,
+        },
+      },
+    });
   });
 
   revalidatePath("/admin/orders");
@@ -805,26 +802,21 @@ export async function addOrderNote(input: {
       input
     );
 
-  await prisma.orderNote.create({
-    data: {
-      orderId:
-        parsed.orderId,
-
-      note:
-        parsed.note,
-
-      createdBy:
-        session.user.id,
-    },
-  });
-
-  await logActivity({
-    userId: session.user.id,
-    action:
-      "ORDER_NOTE_ADDED",
-
-    resource:
-      `Order:${parsed.orderId}`,
+  await prisma.$transaction(async (tx) => {
+    await tx.orderNote.create({
+      data: {
+        orderId: parsed.orderId,
+        note: parsed.note,
+        createdBy: session.user.id,
+      },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_NOTE_ADDED",
+        resource: `Order:${parsed.orderId}`,
+      },
+    });
   });
 
   revalidatePath(
