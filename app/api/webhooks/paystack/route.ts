@@ -519,7 +519,7 @@ async function handleChargeSuccess(
         where: {
           id: {
             in:
-              cartLines.map(
+              metadataCartLines.map(
                 (line) =>
                   line.productId,
               ),
