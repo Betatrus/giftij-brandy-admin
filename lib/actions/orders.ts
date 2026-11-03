@@ -7,7 +7,6 @@ import {
   stripFinancialFields,
   stripFinancialFieldsFromList,
 } from "@/lib/permissions";
-import { logActivity } from "@/lib/activity-log";
 import {
   getPagination,
   getPageCount,
