@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { listReturnableOrderItems, recordCustomerReturn } from "@/lib/actions/inventory";
+import { completeCustomerRefund, listPendingCustomerRefunds, listReturnableOrderItems, recordCustomerReturn } from "@/lib/actions/inventory";
 
 type ReturnableItem = Awaited<ReturnType<typeof listReturnableOrderItems>>[number];
+type PendingRefund = Awaited<ReturnType<typeof listPendingCustomerRefunds>>[number];
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -12,6 +13,8 @@ function today() {
 export function CustomerReturnPanel() {
   const [items, setItems] = useState<ReturnableItem[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [pendingRefunds, setPendingRefunds] = useState<PendingRefund[]>([]);
+  const [completingId, setCompletingId] = useState("");
   const [quantity, setQuantity] = useState(1);
   const [restockQuantity, setRestockQuantity] = useState(1);
   const [refundAmount, setRefundAmount] = useState("");
@@ -26,8 +29,9 @@ export function CustomerReturnPanel() {
   async function load() {
     setLoading(true);
     try {
-      const result = await listReturnableOrderItems();
+      const [result, pending] = await Promise.all([listReturnableOrderItems(), listPendingCustomerRefunds()]);
       setItems(result);
+      setPendingRefunds(pending);
       setSelectedId((current) => result.some((item) => item.orderItemId === current) ? current : result[0]?.orderItemId ?? "");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load delivered order items.");
@@ -37,6 +41,21 @@ export function CustomerReturnPanel() {
   }
 
   useEffect(() => { void load(); }, []);
+
+  async function markRefundCompleted(id: string) {
+    setError("");
+    setMessage("");
+    setCompletingId(id);
+    try {
+      await completeCustomerRefund(id);
+      setMessage("Refund marked completed. The original sale has been reconciled.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unable to update refund status.");
+    } finally {
+      setCompletingId("");
+    }
+  }
 
   const selected = useMemo(() => items.find((item) => item.orderItemId === selectedId), [items, selectedId]);
 
@@ -78,6 +97,28 @@ export function CustomerReturnPanel() {
       <div className="mb-4">
         <h2 className="font-display text-lg text-ink">Customer Return / Refund</h2>
         <p className="mt-1 font-body text-sm text-ink/50">Record a return after the customer has received and returned the item. Select the refund status based on the manual refund process; only resale-eligible units are added back to available stock.</p>
+      </div>
+      <div className="mb-5 rounded-xl border border-cream p-4">
+        <h3 className="font-display text-base text-ink">Pending refunds</h3>
+        <p className="mt-1 text-xs text-ink/50">After confirming the refund outside this system, mark it completed here. This updates revenue reconciliation and records the staff action.</p>
+        {pendingRefunds.length === 0 ? (
+          <p className="mt-3 text-sm text-ink/50">There are no pending refunds.</p>
+        ) : (
+          <div className="mt-3 space-y-3">
+            {pendingRefunds.map((refund) => (
+              <div key={refund.id} className="flex flex-wrap items-center justify-between gap-3 border-t border-cream pt-3">
+                <div className="text-sm">
+                  <p className="font-medium text-ink">{refund.orderNumber} · {refund.customerName}</p>
+                  <p className="text-ink/60">{refund.productName}{refund.variant ? ` — ${refund.variant}` : ""} · {refund.quantity} returned · {refund.businessDate}</p>
+                  {refund.note && <p className="text-xs text-ink/50">{refund.note}</p>}
+                </div>
+                <button type="button" onClick={() => markRefundCompleted(refund.id)} disabled={!!completingId} className="rounded-lg bg-gold px-3 py-2 text-xs font-medium text-black disabled:opacity-50">
+                  {completingId === refund.id ? "Updating..." : "Mark refund completed"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {loading ? <p className="text-sm text-ink/50">Loading delivered orders...</p> : items.length === 0 ? (
         <p className="rounded-xl bg-cream/40 p-3 text-sm text-ink/60">No delivered order items currently have quantities eligible for return.</p>
