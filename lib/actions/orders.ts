@@ -475,7 +475,7 @@ export async function resolveStockUnavailableOrder(id: string) {
     throw new Error("FORBIDDEN: order and inventory permissions are required to allocate stock.");
   }
 
-  const result = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE
     `;
@@ -606,14 +606,21 @@ export async function resolveStockUnavailableOrder(id: string) {
       data: { orderId: id, label: "Stock Allocated — Order Ready for Fulfilment" },
     });
 
-    return { orderNumber: order.orderNumber, itemCount: order.items.length };
-  });
-
-  await logActivity({
-    userId: session.user.id,
-    action: "ORDER_STOCK_UNAVAILABLE_RESOLVED",
-    resource: `Order:${id}`,
-    metadata: { orderNumber: result.orderNumber, itemCount: result.itemCount, stockAllocated: true },
+    // Keep the durable activity audit in the same transaction as stock
+    // allocation. If this write fails, the inventory changes and order flag
+    // update roll back together rather than reporting a false failure.
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_STOCK_UNAVAILABLE_RESOLVED",
+        resource: `Order:${id}`,
+        metadata: {
+          orderNumber: order.orderNumber,
+          itemCount: order.items.length,
+          stockAllocated: true,
+        },
+      },
+    });
   });
 
   revalidatePath("/admin/orders");
