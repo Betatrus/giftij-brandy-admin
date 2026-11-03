@@ -505,6 +505,22 @@ export async function getAnalyticsOverview(
     }
   }
 
+  const returnRecords = await prisma.customerReturn.findMany({
+    where: {
+      businessDate: { gte: from, lte: to },
+      ...(parsed.categoryId ? { orderItem: { product: { categories: { some: { id: parsed.categoryId } } } } } : {}),
+    },
+    select: { quantity: true, restockQuantity: true, refundAmount: true },
+  });
+  const returnMetrics = {
+    recordCount: returnRecords.length,
+    unitsReturned: returnRecords.reduce((sum, item) => sum + item.quantity, 0),
+    unitsRestocked: returnRecords.reduce((sum, item) => sum + item.restockQuantity, 0),
+    refundAmount: canSeeFinancials
+      ? returnRecords.reduce((sum, item) => sum + Number(item.refundAmount ?? 0), 0)
+      : null,
+  };
+
   return {
     range: {
       from: from.toISOString(),
@@ -534,6 +550,8 @@ export async function getAnalyticsOverview(
     trend,
 
     lowStockCount,
+
+    customerReturns: returnMetrics,
 
     onlineSales: {
       count: onlineLines.length,
