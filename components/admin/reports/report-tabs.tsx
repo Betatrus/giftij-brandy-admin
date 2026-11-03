@@ -19,6 +19,7 @@ type Tab =
   | "SALES"
   | "CUSTOMERS"
   | "INVENTORY"
+  | "RETURNS"
   | "FINANCIAL"
   | "OPERATIONAL";
 
@@ -84,6 +85,8 @@ export function ReportTabs({
       {tab === "INVENTORY" && (
         <InventoryReportView categories={categories} />
       )}
+
+      {tab === "RETURNS" && <CustomerReturnsReportView />}
 
       {tab === "FINANCIAL" &&
         canSeeFinancials && (
