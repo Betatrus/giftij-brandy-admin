@@ -311,7 +311,8 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
 
 
 export async function listReturnableOrderItems() {
-  await requireSession();
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to manage customer returns");
   const items = await prisma.orderItem.findMany({
     where: { order: { status: { in: ["DELIVERED", "RETURNED", "REFUNDED"] } } },
     orderBy: { order: { createdAt: "desc" } },
