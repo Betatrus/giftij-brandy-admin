@@ -196,7 +196,7 @@ export function SalesReportView({
               <th className="px-4 py-3">Source</th>
               <th className="px-4 py-3">Product</th>
               <th className="px-4 py-3 text-right">Qty</th>
-              <th className="px-4 py-3 text-right">Revenue</th>
+              <th className="px-4 py-3 text-right">Net Revenue</th>
               <th className="px-4 py-3">Customer</th>
               <th className="px-4 py-3">Refund reconciliation</th>
             </tr>
@@ -215,7 +215,7 @@ export function SalesReportView({
             ) : lines.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   className="px-4 py-10 text-center text-ink/40"
                 >
                   No sales in this range.
