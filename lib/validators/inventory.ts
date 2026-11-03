@@ -192,6 +192,7 @@ export const recordCustomerReturnSchema = z.object({
   orderItemId: z.string().min(1),
   quantity: z.coerce.number().int().min(1),
   restockQuantity: z.coerce.number().int().min(0),
+  refundHandled: z.literal(true, { errorMap: () => ({ message: "Confirm that the refund has already been handled." }) }),
   refundAmount: z.coerce.number().min(0).optional(),
   businessDate: businessDateSchema,
   note: z.string().max(1000).optional(),
