@@ -477,6 +477,7 @@ export async function resolveStockUnavailableOrder(id: string) {
         id: true,
         orderNumber: true,
         status: true,
+        paymentReference: true,
         stockUnavailable: true,
         cancellationReviewStatus: true,
         items: {
@@ -487,6 +488,9 @@ export async function resolveStockUnavailableOrder(id: string) {
 
     if (!order.stockUnavailable) {
       throw new Error("This order has already been allocated or does not require stock resolution.");
+    }
+    if (!order.paymentReference) {
+      throw new Error("This order has no verified payment reference and cannot receive stock allocation.");
     }
     if (!["PENDING", "PROCESSING"].includes(order.status)) {
       throw new Error("Only active paid orders can have stock allocated.");
@@ -584,7 +588,7 @@ export async function resolveStockUnavailableOrder(id: string) {
     await tx.orderNote.create({
       data: {
         orderId: id,
-        note: `STOCK RESOLVED: Full order quantity allocated from received inventory by ${session.user.name}.`,
+        note: `STOCK RESOLVED: Full order quantity allocated from received inventory by ${session.user.name ?? session.user.email ?? "an administrator"}.`,
         createdBy: session.user.id,
       },
     });
