@@ -147,7 +147,7 @@ async function verifySuccessfulTransaction(
     data.amount !== expected || verified.currency !== "NGN" ||
     (data.currency ?? "NGN") !== "NGN"
   ) {
-    throw new PaymentReviewRequiredError(
+    throw new PaymentVerificationMismatchError(
       "Paystack transaction verification did not match this checkout.",
     );
   }
