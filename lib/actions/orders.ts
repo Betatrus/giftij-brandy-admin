@@ -420,6 +420,7 @@ export async function completeOrder(
         id,
         status: "PROCESSING",
         stockUnavailable: false,
+        cancellationReviewStatus: { in: ["NONE", "REJECTED"] },
       },
       data: {
         status: "DELIVERED",
