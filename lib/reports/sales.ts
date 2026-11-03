@@ -68,7 +68,23 @@ export type SalesLine = {
   categoryNames: string[];
   variantId: string | null;
   variantValue: string | null;
-  quantity: number;
+  quantity: number; // net units after completed customer refunds
+  soldQuantity: number;
+  returnedQuantity: number;
+  completedReturnedQuantity: number;
+  returnedSalesValue: number;
+  actualRefundAmount: number | null; // completed cash refunds; financial permission enforced by caller
+  refundStatus: "NOT_RETURNED" | "PENDING" | "COMPLETED" | "PARTIAL" | "RETURN_RECORDED";
+  refundDate: Date | null;
+  returnDetails: Array<{
+    id: string;
+    quantity: number;
+    restockQuantity: number;
+    refundStatus: "NOT_REQUIRED" | "PENDING" | "COMPLETED";
+    refundAmount: number | null;
+    businessDate: Date;
+    note: string | null;
+  }>;
   // null means "no historical price was ever captured for this line" —
   // NEVER filled in from the product's current price. See the module
   // comment above. Always non-null for ONLINE lines (OrderItem.unitPrice
@@ -131,11 +147,23 @@ export async function getUnifiedSalesLines(filters: ReportFiltersInput): Promise
         order: { select: { id: true, createdAt: true, customerId: true, customer: { select: { name: true } } } },
         product: { select: { id: true, name: true, categories: { select: { name: true } } } },
         variant: { select: { id: true, value: true } },
+        customerReturns: { select: { id: true, quantity: true, restockQuantity: true, refundStatus: true, refundAmount: true, businessDate: true, note: true } },
       },
     });
 
     for (const item of items) {
       const unitPrice = Number(item.unitPrice); // real historical price, always present
+      const returns = item.customerReturns;
+      const returnedQuantity = returns.reduce((sum, entry) => sum + entry.quantity, 0);
+      const completedReturnedQuantity = returns.reduce((sum, entry) => sum + (entry.refundStatus === "COMPLETED" ? entry.quantity : 0), 0);
+      const pendingCount = returns.filter((entry) => entry.refundStatus === "PENDING").length;
+      const completedCount = returns.filter((entry) => entry.refundStatus === "COMPLETED").length;
+      const refundStatus: SalesLine["refundStatus"] = returns.length === 0 ? "NOT_RETURNED"
+        : pendingCount > 0 && completedCount > 0 ? "PARTIAL"
+        : pendingCount > 0 ? "PENDING"
+        : completedCount > 0 ? "COMPLETED" : "RETURN_RECORDED";
+      const completedReturns = returns.filter((entry) => entry.refundStatus === "COMPLETED");
+      const refundDate = completedReturns.length ? completedReturns.reduce((latest, entry) => entry.businessDate > latest ? entry.businessDate : latest, completedReturns[0].businessDate) : null;
       onlineLines.push({
         id: `online-${item.id}`,
         date: item.order.createdAt,
@@ -145,9 +173,17 @@ export async function getUnifiedSalesLines(filters: ReportFiltersInput): Promise
         categoryNames: item.product.categories.map((c) => c.name),
         variantId: item.variant?.id ?? null,
         variantValue: item.variant?.value ?? null,
-        quantity: item.quantity,
+        quantity: item.quantity - completedReturnedQuantity,
+        soldQuantity: item.quantity,
+        returnedQuantity,
+        completedReturnedQuantity,
+        returnedSalesValue: unitPrice * completedReturnedQuantity,
+        actualRefundAmount: completedReturns.reduce((sum, entry) => sum + Number(entry.refundAmount ?? 0), 0),
+        refundStatus,
+        refundDate,
+        returnDetails: returns.map((entry) => ({ id: entry.id, quantity: entry.quantity, restockQuantity: entry.restockQuantity, refundStatus: entry.refundStatus, refundAmount: entry.refundAmount === null ? null : Number(entry.refundAmount), businessDate: entry.businessDate, note: entry.note })),
         unitPrice,
-        revenue: unitPrice * item.quantity,
+        revenue: unitPrice * (item.quantity - completedReturnedQuantity),
         revenueKnown: true,
         originalPrice: null,
         discountAmount: null,
@@ -204,6 +240,22 @@ export async function getUnifiedSalesLines(filters: ReportFiltersInput): Promise
         variantId: null,
         variantValue: null,
         quantity: log.quantity,
+        soldQuantity: log.quantity,
+        returnedQuantity: 0,
+        completedReturnedQuantity: 0,
+        returnedSalesValue: 0,
+        actualRefundAmount: null,
+        refundStatus: "NOT_RETURNED",
+        refundDate: null,
+        returnDetails: [],
+        soldQuantity: log.quantity,
+        returnedQuantity: 0,
+        completedReturnedQuantity: 0,
+        returnedSalesValue: 0,
+        actualRefundAmount: null,
+        refundStatus: "NOT_RETURNED",
+        refundDate: null,
+        returnDetails: [],
         unitPrice: unitSellingPrice, // the ACTUAL price captured at sale time, or null — never Product.price
         revenue: revenueKnown ? unitSellingPrice * log.quantity : null,
         revenueKnown,
