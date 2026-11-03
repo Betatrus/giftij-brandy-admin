@@ -357,26 +357,28 @@ export async function completeCustomerRefund(returnId: string) {
     if (updated.count !== 1) {
       throw new Error("This refund is no longer pending. Refresh the list and check its current status.");
     }
-    return tx.customerReturn.findUniqueOrThrow({
+    const record = await tx.customerReturn.findUniqueOrThrow({
       where: { id },
       include: {
         order: { select: { orderNumber: true } },
         orderItem: { select: { product: { select: { name: true } } } },
       },
     });
-  });
-  await logActivity({
-    userId: session.user.id,
-    action: "CUSTOMER_REFUND_COMPLETED",
-    resource: `CustomerReturn:${result.id}`,
-    metadata: {
-      orderNumber: result.order.orderNumber,
-      productName: result.orderItem.product.name,
-      quantityReturned: result.quantity,
-      refundStatus: "COMPLETED",
-      completedBy: session.user.name ?? session.user.email ?? "Admin",
-      completedAt: new Date().toISOString(),
-    },
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "CUSTOMER_REFUND_COMPLETED",
+        resource: `CustomerReturn:${record.id}`,
+        metadata: {
+          orderNumber: record.order.orderNumber,
+          productName: record.orderItem.product.name,
+          quantityReturned: record.quantity,
+          refundStatus: "COMPLETED",
+          completedBy: session.user.name ?? session.user.email ?? "Admin",
+        },
+      },
+    });
+    return record;
   });
   revalidatePath("/admin/inventory");
   revalidatePath("/admin/reports");
