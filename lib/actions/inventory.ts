@@ -309,6 +309,35 @@ export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
   return { success: true, returnId: result.record.id };
 }
 
+
+export async function listReturnableOrderItems() {
+  await requireSession();
+  const items = await prisma.orderItem.findMany({
+    where: { order: { status: { in: ["DELIVERED", "RETURNED", "REFUNDED"] } } },
+    orderBy: { order: { createdAt: "desc" } },
+    take: 300,
+    select: {
+      id: true, quantity: true, variant: { select: { value: true } },
+      product: { select: { name: true, sku: true } },
+      order: { select: { id: true, orderNumber: true, status: true, createdAt: true, customer: { select: { name: true, email: true } } } },
+      customerReturns: { select: { quantity: true } },
+    },
+  });
+  return items.map((item) => ({
+    orderItemId: item.id,
+    orderNumber: item.order.orderNumber,
+    orderDate: item.order.createdAt,
+    customerName: item.order.customer.name,
+    customerEmail: item.order.customer.email,
+    productName: item.product.name,
+    sku: item.product.sku,
+    variant: item.variant?.value ?? null,
+    orderedQuantity: item.quantity,
+    returnedQuantity: item.customerReturns.reduce((sum, r) => sum + r.quantity, 0),
+    remainingQuantity: item.quantity - item.customerReturns.reduce((sum, r) => sum + r.quantity, 0),
+  })).filter((item) => item.remainingQuantity > 0);
+}
+
 export async function adjustStock(
   input: AdjustStockInput,
 ) {
