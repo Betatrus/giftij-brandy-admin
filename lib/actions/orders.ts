@@ -725,12 +725,13 @@ export async function resolveCancellationReview(
   }
 
   await prisma.$transaction(async (tx) => {
+    // Both decisions require an order that is still active. A stale review
+    // must not be rejected after the order has already been completed or
+    // cancelled by another action.
     const where: Prisma.OrderWhereInput = {
       id,
+      status: { in: ["PENDING", "PROCESSING"] },
       cancellationReviewStatus: "REQUESTED",
-      ...(decision === "APPROVE"
-        ? { status: { in: ["PENDING", "PROCESSING"] } }
-        : {}),
     };
 
     const changed = await tx.order.updateMany({
