@@ -478,6 +478,11 @@ async function handleChargeSuccess(
     );
   }
 
+  // Reject malformed or incomplete payment metadata before any customer,
+  // order, or inventory writes. A verified charge with an invalid cart must
+  // not create a partial customer record as a side effect.
+  const priceSnapshots = getValidatedPriceSnapshots(data);
+
   const {
     shippingAddress,
     name,
@@ -505,8 +510,6 @@ async function handleChargeSuccess(
           undefined,
       },
     );
-
-  const priceSnapshots = getValidatedPriceSnapshots(data);
   // For a reservation-backed checkout, the database reservation—not
   // mutable webhook metadata—is authoritative for products, variants and quantities.
   const metadataCartLines: CartLine[] = priceSnapshots.map(({ productId, variantId, quantity }) => ({
