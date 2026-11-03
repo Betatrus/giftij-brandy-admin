@@ -161,31 +161,46 @@ function getValidatedPriceSnapshots(
     throw new InvalidVerifiedPaymentError("Payment metadata has no checkout cart.");
   }
 
-  const seen = new Set<string>();
-  return cart.map((line) => {
+  const grouped = new Map<string, CheckoutPriceSnapshot>();
+
+  for (const line of cart) {
     if (
       !line || typeof line.productId !== "string" || !line.productId.trim() ||
       !(line.variantId === undefined || line.variantId === null || (typeof line.variantId === "string" && line.variantId.trim())) ||
       !Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
-      typeof line.unitPrice !== "number" || !Number.isFinite(line.unitPrice) || line.unitPrice < 0
+      typeof line.unitPrice !== "number" || !Number.isFinite(line.unitPrice) || line.unitPrice < 0 ||
+      !Number.isSafeInteger(Math.round(line.unitPrice * 100)) ||
+      Math.abs(line.unitPrice * 100 - Math.round(line.unitPrice * 100)) > 1e-7
     ) {
       throw new InvalidVerifiedPaymentError("Payment metadata contains an invalid cart or price snapshot.");
     }
 
     const variantId = line.variantId ?? null;
     const key = `${line.productId}:${variantId ?? ""}`;
-    if (seen.has(key)) {
-      throw new InvalidVerifiedPaymentError("Payment metadata contains duplicate product lines.");
-    }
-    seen.add(key);
+    const existing = grouped.get(key);
 
-    return {
-      productId: line.productId,
-      variantId,
-      quantity: line.quantity,
-      unitPrice: line.unitPrice,
-    };
-  });
+    if (existing) {
+      // Duplicate product/variant rows are safe to combine only when they
+      // carry the same immutable unit-price snapshot.
+      if (existing.unitPrice !== line.unitPrice) {
+        throw new InvalidVerifiedPaymentError("Duplicate cart lines contain conflicting price snapshots.");
+      }
+      const combinedQuantity = existing.quantity + line.quantity;
+      if (!Number.isSafeInteger(combinedQuantity)) {
+        throw new InvalidVerifiedPaymentError("Payment metadata contains an invalid cart quantity.");
+      }
+      existing.quantity = combinedQuantity;
+    } else {
+      grouped.set(key, {
+        productId: line.productId,
+        variantId,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+      });
+    }
+  }
+
+  return Array.from(grouped.values());
 }
 
 function normalizeCartForComparison(
