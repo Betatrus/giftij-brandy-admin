@@ -12,6 +12,8 @@ import {
   type AdjustStockInput,
   type AdjustVariantStockInput,
   type AdjustmentReasonType,
+  recordCustomerReturnSchema,
+  type RecordCustomerReturnInput,
 } from "@/lib/validators/inventory";
 
 import {
@@ -214,6 +216,97 @@ function revalidateInventory() {
   );
 
   revalidateTag("products");
+}
+
+
+export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to record customer returns");
+  const parsed = recordCustomerReturnSchema.parse(input);
+  const businessDate = new Date(parsed.businessDate + "T00:00:00.000Z");
+  if (Number.isNaN(businessDate.getTime()) || parsed.businessDate > new Date().toISOString().slice(0, 10)) {
+    throw new Error("Return date must be valid and cannot be in the future.");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const lockedItems = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "OrderItem" WHERE "id" = ${parsed.orderItemId} FOR UPDATE
+    `;
+    if (!lockedItems.length) throw new Error("Order item not found.");
+    const item = await tx.orderItem.findUniqueOrThrow({
+      where: { id: parsed.orderItemId },
+      include: {
+        order: { select: { id: true, orderNumber: true, customerId: true, status: true } },
+        product: { select: { id: true, name: true, sku: true } },
+        variant: { select: { id: true, value: true, sku: true } },
+      },
+    });
+    if (!["DELIVERED", "RETURNED", "REFUNDED"].includes(item.order.status)) {
+      throw new Error("Only items from delivered orders can be returned.");
+    }
+    const previous = await tx.customerReturn.aggregate({
+      where: { orderItemId: item.id }, _sum: { quantity: true },
+    });
+    const remaining = item.quantity - (previous._sum.quantity ?? 0);
+    if (parsed.quantity > remaining) throw new Error(`Only ${remaining} unit(s) remain eligible for return on this order item.`);
+
+    if (parsed.restockQuantity > 0) {
+      if (item.variantId) {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "ProductVariant" WHERE "id" = ${item.variantId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error("The purchased variant no longer exists.");
+        await tx.productVariant.update({
+          where: { id: item.variantId },
+          data: { currentStock: { increment: parsed.restockQuantity }, returnedStock: { increment: parsed.restockQuantity } },
+        });
+        await tx.variantInventoryLog.create({
+          data: { variantId: item.variantId, changeType: "RETURN", quantity: parsed.restockQuantity,
+            reason: `[CUSTOMER_RETURN][DATE:${parsed.businessDate}] Order ${item.order.orderNumber}; returned ${parsed.quantity}; restocked ${parsed.restockQuantity}${parsed.note ? `; ${parsed.note}` : ""}`,
+            performedById: session.user.id },
+        });
+      } else {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "Inventory" WHERE "productId" = ${item.productId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error("Inventory record not found for the returned product.");
+        await tx.inventory.update({
+          where: { id: locked[0].id },
+          data: { currentStock: { increment: parsed.restockQuantity }, returnedStock: { increment: parsed.restockQuantity } },
+        });
+        await tx.inventoryLog.create({
+          data: { inventoryId: locked[0].id, changeType: "RETURN", quantity: parsed.restockQuantity,
+            reason: `[CUSTOMER_RETURN][DATE:${parsed.businessDate}] Order ${item.order.orderNumber}; returned ${parsed.quantity}; restocked ${parsed.restockQuantity}${parsed.note ? `; ${parsed.note}` : ""}`,
+            performedById: session.user.id },
+        });
+      }
+    }
+    const record = await tx.customerReturn.create({
+      data: { orderId: item.orderId, orderItemId: item.id, quantity: parsed.quantity,
+        restockQuantity: parsed.restockQuantity, refundAmount: parsed.refundAmount,
+        businessDate, note: parsed.note?.trim() || null, processedById: session.user.id },
+    });
+    await tx.customerEvent.create({
+      data: { customerId: item.order.customerId, label: "Customer return recorded",
+        metadata: { orderNumber: item.order.orderNumber, productName: item.product.name,
+          variant: item.variant?.value ?? null, quantity: parsed.quantity,
+          restockQuantity: parsed.restockQuantity, refundAmount: parsed.refundAmount ?? null } },
+    });
+    return { record, item };
+  });
+
+  await logActivity({
+    userId: session.user.id, action: "INVENTORY_CUSTOMER_RETURN",
+    resource: `CustomerReturn:${result.record.id}`,
+    metadata: { orderNumber: result.item.order.orderNumber, orderItemId: result.item.id,
+      productName: result.item.product.name, variant: result.item.variant?.value ?? null,
+      quantityReturned: parsed.quantity, quantityRestocked: parsed.restockQuantity,
+      refundAmount: parsed.refundAmount ?? null, businessDate: parsed.businessDate, note: parsed.note ?? null },
+  });
+  revalidateInventory();
+  revalidatePath("/admin/reports");
+  revalidatePath("/admin/customers");
+  return { success: true, returnId: result.record.id };
 }
 
 export async function adjustStock(
