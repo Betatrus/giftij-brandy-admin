@@ -15,6 +15,7 @@ export function CustomerReturnPanel() {
   const [quantity, setQuantity] = useState(1);
   const [restockQuantity, setRestockQuantity] = useState(1);
   const [refundAmount, setRefundAmount] = useState("");
+  const [refundHandled, setRefundHandled] = useState(false);
   const [businessDate, setBusinessDate] = useState(today());
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(true);
@@ -53,6 +54,7 @@ export function CustomerReturnPanel() {
         orderItemId: selected.orderItemId,
         quantity,
         restockQuantity,
+        refundHandled: refundHandled as true,
         refundAmount: refundAmount === "" ? undefined : Number(refundAmount),
         businessDate,
         note: note.trim() || undefined,
@@ -61,6 +63,7 @@ export function CustomerReturnPanel() {
       setQuantity(1);
       setRestockQuantity(1);
       setRefundAmount("");
+      setRefundHandled(false);
       setNote("");
       await load();
     } catch (e) {
@@ -99,12 +102,13 @@ export function CustomerReturnPanel() {
           <label className="font-body text-sm text-ink/70">Return / refund date
             <input type="date" max={today()} value={businessDate} onChange={(e) => setBusinessDate(e.target.value)} className="mt-1 w-full rounded-xl border border-cream px-3 py-2" />
           </label>
+          <label className="md:col-span-2 flex items-start gap-2 text-sm text-ink/70"><input type="checkbox" checked={refundHandled} onChange={(e) => setRefundHandled(e.target.checked)} className="mt-1" /> I confirm the customer return has been received and the refund has already been handled outside the system.</label>
           <label className="font-body text-sm text-ink/70 md:col-span-2">Note (optional)
             <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded-xl border border-cream px-3 py-2" placeholder="Condition, refund reference, or handling note" />
           </label>
           <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-3">
             <p className="text-xs text-ink/50">Returned but not restocked: {quantity - restockQuantity} unit(s). These do not increase available stock.</p>
-            <button type="button" onClick={submit} disabled={pending || loading} className="rounded-xl bg-gold px-4 py-2 text-sm font-medium text-black disabled:opacity-50">{pending ? "Recording..." : "Record return"}</button>
+            <button type="button" onClick={submit} disabled={pending || loading || !refundHandled} className="rounded-xl bg-gold px-4 py-2 text-sm font-medium text-black disabled:opacity-50">{pending ? "Recording..." : "Record return"}</button>
           </div>
         </div>
       )}
