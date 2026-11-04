@@ -1,5 +1,6 @@
 "use server";
 
+import { BlogPostStatus } from "@prisma/client";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity-log";
@@ -62,7 +63,7 @@ export async function saveBlogPost(input: {
     if (!category) throw new Error("Selected category was not found.");
   }
   const tags = Array.from(new Set(input.tags.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean))).slice(0, 12);
-  const status = input.intent === "PUBLISH" ? "PUBLISHED" : "DRAFT";
+  const status: BlogPostStatus = input.intent === "PUBLISH" ? "PUBLISHED" : "DRAFT";
 
   const post = await prisma.$transaction(async (tx) => {
     const existing = input.id ? await tx.blogPost.findUnique({ where: { id: input.id } }) : null;
