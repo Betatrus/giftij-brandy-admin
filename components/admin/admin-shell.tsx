@@ -25,7 +25,7 @@ export function AdminShell({
 
   return (
     <UnsavedChangesProvider>
-      <div className="min-h-screen bg-milk">
+      <div className="admin-app min-h-screen bg-milk">
         <MobileTopBar
           userName={userName}
           onOpenMenu={() =>
@@ -56,12 +56,14 @@ export function AdminShell({
             />
           )}
 
-          <main className="flex-1 p-4 md:p-8 min-w-0">
-            <div className="hidden md:flex items-center justify-end mb-4">
-              <NotificationBell />
-            </div>
+          <main className="flex-1 min-w-0 p-4 md:p-8">
+            <div className="mx-auto w-full max-w-[1680px]">
+              <div className="mb-4 hidden items-center justify-end md:flex">
+                <NotificationBell />
+              </div>
 
-            {children}
+              {children}
+            </div>
           </main>
         </div>
       </div>
