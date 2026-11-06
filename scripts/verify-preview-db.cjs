@@ -1,4 +1,6 @@
 const { PrismaClient } = require("@prisma/client");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const expectedProjectId = "winter-math-06173043";
 const expectedEndpoint = "ep-solitary-sea-bbod87tf";
@@ -25,23 +27,52 @@ const prisma = new PrismaClient({
   log: ["error"],
 });
 
+// This Preview database is shared with the campaign-preview workstream.
+// That workstream applied this additive migration; its tables do not alter
+// the checkout schema used by this branch. Keep the exception explicit.
+const allowedAdditionalMigrations = new Set([
+  "20261106170000_add_promotion_campaigns",
+]);
+
+const migrationsDirectory = path.join(process.cwd(), "prisma", "migrations");
+const expectedMigrations = fs.readdirSync(migrationsDirectory, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name);
+
 async function main() {
   const identity = await prisma.$queryRaw`SELECT current_database() AS database_name, current_setting('server_version') AS postgres_version`;
   const tableRows = await prisma.$queryRaw`SELECT count(*)::int AS count FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`;
-  const migrationRows = await prisma.$queryRaw`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`;
+  const migrationRows = await prisma.$queryRaw`SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name`;
   const pendingRows = await prisma.$queryRaw`SELECT count(*)::int AS count FROM "_prisma_migrations" WHERE finished_at IS NULL AND rolled_back_at IS NULL`;
 
   if (identity[0]?.database_name !== "neondb") {
     throw new Error("Preview database identity check failed.");
   }
-  if (Number(migrationRows[0]?.count) !== 11 || Number(pendingRows[0]?.count) !== 0) {
-    throw new Error("Preview database migration history is incomplete or contains pending migrations.");
+
+  const finishedMigrations = migrationRows.map((row) => row.migration_name);
+  const finishedSet = new Set(finishedMigrations);
+  const missingMigrations = expectedMigrations.filter((name) => !finishedSet.has(name));
+  const unexpectedMigrations = finishedMigrations.filter(
+    (name) => !expectedMigrations.includes(name) && !allowedAdditionalMigrations.has(name),
+  );
+
+  if (
+    missingMigrations.length > 0 ||
+    unexpectedMigrations.length > 0 ||
+    Number(pendingRows[0]?.count) !== 0
+  ) {
+    throw new Error(
+      `Preview migration history mismatch. Missing: ${missingMigrations.join(", ") || "none"}. Unexpected: ${unexpectedMigrations.join(", ") || "none"}. Pending: ${Number(pendingRows[0]?.count)}.`,
+    );
   }
+
   if (Number(tableRows[0]?.count) < 25) {
     throw new Error("Preview database schema is incomplete.");
   }
 
-  console.log("[preview-db-check] PASS: approved Neon project, database connection, schema, and all 11 migrations verified.");
+  console.log(
+    `[preview-db-check] PASS: approved Neon project, database connection, ${expectedMigrations.length} repository migrations, and approved additive migration extensions verified.`,
+  );
   console.log("[preview-db-check] Database:", identity[0].database_name, "|", identity[0].postgres_version, "|", parsedUrl.hostname);
 }
 
