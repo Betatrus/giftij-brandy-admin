@@ -5,3 +5,55 @@
 body {
   -webkit-font-smoothing: antialiased;
 }
+
+
+/* Admin-only usability refinements. All selectors are scoped to .admin-app;
+   the public storefront and its visual design are unaffected. */
+.admin-app :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+  color: #332d24;
+  border-color: #e8dfd0;
+  border-radius: 0.75rem;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.admin-app :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus-visible {
+  outline: 2px solid rgb(185 154 90 / 35%);
+  outline-offset: 1px;
+  border-color: #b99a5a;
+  box-shadow: 0 0 0 3px rgb(185 154 90 / 10%);
+}
+
+.admin-app :where(button, a, [role="button"], input, select, textarea):focus-visible {
+  outline-color: #b99a5a;
+  outline-offset: 2px;
+}
+
+.admin-app :where(table) {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.admin-app :where(thead th) {
+  color: #766d60;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.045em;
+  white-space: nowrap;
+}
+
+.admin-app :where(tbody tr) {
+  transition: background-color 140ms ease;
+}
+
+.admin-app :where(tbody tr:hover) {
+  background-color: #fdfaf5;
+}
+
+.admin-app :where(tbody td) {
+  vertical-align: middle;
+}
+
+.admin-app :where(button:disabled, select:disabled, input:disabled) {
+  cursor: not-allowed;
+}
