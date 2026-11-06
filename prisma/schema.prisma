@@ -572,6 +572,66 @@ model Campaign {
   updatedAt     DateTime       @updatedAt
 }
 
+
+
+// ============================================================
+// PROMOTIONAL CAMPAIGNS (marketing UI can move to marketing subdomain in V2)
+// ============================================================
+enum PromotionCampaignStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  PAUSED
+  ENDED
+}
+
+model PromotionCampaign {
+  id             String                   @id @default(cuid())
+  name           String
+  slug           String                   @unique
+  status         PromotionCampaignStatus  @default(DRAFT)
+  announcementMode String                 @default("HTML") // HTML or FLYER
+  imageUrl       String?
+  headline       String
+  caption        String?
+  message        String?                  @db.Text
+  ctaLabel       String                   @default("Explore offers")
+  popupEnabled   Boolean                  @default(true)
+  bannerEnabled  Boolean                  @default(false)
+  popupSeconds   Int                      @default(6)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  offerSets      PromotionOfferSet[]
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@index([status, startsAt, endsAt])
+}
+
+model PromotionOfferSet {
+  id             String             @id @default(cuid())
+  campaignId     String
+  campaign       PromotionCampaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  name           String
+  description    String?            @db.Text
+  productIds     String[]           @default([])
+  benefits       String[]           @default([]) // DISCOUNT, FREE_DELIVERY, FREE_GIFT
+  discountType   String?            // PERCENTAGE or FIXED
+  discountValue  Decimal?           @db.Decimal(12, 2)
+  giftDescription String?
+  closingMode    String             @default("DURATION") // DURATION or ORDER_LIMIT
+  endsAt         DateTime?
+  orderLimit     Int?
+  paidOrders     Int                @default(0)
+  sortOrder      Int                @default(0)
+  isEnabled      Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([campaignId, isEnabled, sortOrder])
+  @@index([closingMode, endsAt])
+}
+
 // ============================================================
 // STORE SETTINGS
 // ============================================================

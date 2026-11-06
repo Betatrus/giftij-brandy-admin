@@ -1,12 +1,15 @@
 const { PrismaClient } = require("@prisma/client");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const expectedProjectId = "winter-math-06173043";
 const expectedEndpoint = "ep-solitary-sea-bbod87tf";
-const previewUrl = process.env.PREVIEW_DATABASE_URL;
+// DIRECT_URL is the isolated Preview-only unpooled Neon connection used by Prisma Migrate.
+const previewUrl = process.env.DIRECT_URL;
 const previewProjectId = process.env.PREVIEW_NEON_PROJECT_ID;
 
 if (!previewUrl) {
-  throw new Error("PREVIEW_DATABASE_URL is missing; refusing to test or use the Production database.");
+  throw new Error("DIRECT_URL is missing; refusing to test or use the Production database.");
 }
 if (previewProjectId !== expectedProjectId) {
   throw new Error("PREVIEW_NEON_PROJECT_ID does not match the approved giftij-brandy-preview-test Neon project.");
@@ -14,7 +17,7 @@ if (previewProjectId !== expectedProjectId) {
 
 const parsedUrl = new URL(previewUrl);
 if (!parsedUrl.hostname.includes(expectedEndpoint) || !parsedUrl.hostname.endsWith(".aws.neon.tech") || !parsedUrl.hostname.includes("c-15.us-east-1")) {
-  throw new Error("PREVIEW_DATABASE_URL is not an AWS us-east-1 Neon endpoint.");
+  throw new Error("DIRECT_URL is not the approved AWS us-east-1 Neon endpoint.");
 }
 if (previewUrl === process.env.DATABASE_URL) {
   throw new Error("Preview and default database URLs unexpectedly match.");
@@ -34,14 +37,15 @@ async function main() {
   if (identity[0]?.database_name !== "neondb") {
     throw new Error("Preview database identity check failed.");
   }
-  if (Number(migrationRows[0]?.count) !== 11 || Number(pendingRows[0]?.count) !== 0) {
+  const expectedMigrationCount = fs.readdirSync(path.join(__dirname, "..", "prisma", "migrations"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).length;
+  if (Number(migrationRows[0]?.count) !== expectedMigrationCount || Number(pendingRows[0]?.count) !== 0) {
     throw new Error("Preview database migration history is incomplete or contains pending migrations.");
   }
   if (Number(tableRows[0]?.count) < 25) {
     throw new Error("Preview database schema is incomplete.");
   }
 
-  console.log("[preview-db-check] PASS: approved Neon project, database connection, schema, and all 11 migrations verified.");
+  console.log(`[preview-db-check] PASS: approved Neon project, database connection, schema, and all ${expectedMigrationCount} migrations verified.`);
   console.log("[preview-db-check] Database:", identity[0].database_name, "|", identity[0].postgres_version, "|", parsedUrl.hostname);
 }
 
