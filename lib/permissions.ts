@@ -46,40 +46,32 @@ export type Permission =
 
 const ROLE_PERMISSIONS: Record<StaffRole, Permission[]> = {
   SUPER_ADMIN: [
-    "products:read",
-    "products:write",
-    "products:read:financials",
-    "inventory:read",
-    "inventory:write",
-    "orders:read",
-    "orders:write",
-    "orders:read:financials",
-    "customers:read",
-    "customers:write",
-    "communications:read",
-    "communications:write",
-    "analytics:read",
-    "analytics:read:financials",
-    "reports:read",
-    "reports:read:financials",
-    "settings:read",
-    "settings:write",
-    "staff:manage",
+    "products:read", "products:write", "products:read:financials",
+    "inventory:read", "inventory:write",
+    "orders:read", "orders:write", "orders:read:financials",
+    "customers:read", "customers:write",
+    "communications:read", "communications:write",
+    "analytics:read", "analytics:read:financials",
+    "reports:read", "reports:read:financials",
+    "settings:read", "settings:write", "staff:manage",
+  ],
+  TECHNICAL_SUPPORT: [
+    "products:read", "products:write", "products:read:financials",
+    "inventory:read", "inventory:write",
+    "orders:read", "orders:write", "orders:read:financials",
+    "customers:read", "customers:write",
+    "communications:read", "communications:write",
+    "analytics:read", "analytics:read:financials",
+    "reports:read", "reports:read:financials",
+    "settings:read", "settings:write", "staff:manage",
   ],
   SUPPORT_ADMIN: [
-    "products:read",
-    "products:write",
-    "inventory:read",
-    "inventory:write",
-    "orders:read",
-    "orders:write",
-    "customers:read",
-    "customers:write",
-    "communications:read",
-    "communications:write",
-    "analytics:read",
-    "reports:read",
-    // deliberately excluded: *:read:financials, settings:*, staff:manage
+    "products:read", "products:write",
+    "inventory:read", "inventory:write",
+    "orders:read", "orders:write",
+    "customers:read", "customers:write",
+    "communications:read", "communications:write",
+    "analytics:read", "reports:read",
   ],
 };
 
@@ -88,7 +80,7 @@ export function hasPermission(role: StaffRole, permission: Permission): boolean 
 }
 
 export function canViewFinancials(role: StaffRole): boolean {
-  return role === "SUPER_ADMIN";
+  return role === "SUPER_ADMIN" || role === "TECHNICAL_SUPPORT";
 }
 
 /**
