@@ -323,8 +323,11 @@ async function main() {
       where: { id: reservation.reservationId },
       data: { expiresAt: new Date(Date.now() - 1_000) },
     });
-    assert.equal(await releaseExpiredCheckoutReservations(25), 1);
-    assert.equal(await releaseExpiredCheckoutReservations(25), 0);
+    // This bounded cleanup is global and may also release expired reservations
+    // left by an interrupted earlier Preview run. Assert this test reservation's
+    // state and inventory, not the total number of unrelated rows in the batch.
+    await releaseExpiredCheckoutReservations(25);
+    await releaseExpiredCheckoutReservations(25);
     const saved = await prisma.checkoutReservation.findUniqueOrThrow({
       where: { id: reservation.reservationId },
       select: { status: true },
