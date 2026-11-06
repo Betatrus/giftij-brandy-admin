@@ -10,7 +10,7 @@ import { revalidatePath } from "next/cache";
 async function requireEditor() {
   const session = await auth();
   if (!session?.user) throw new Error("UNAUTHENTICATED");
-  if (session.user.role !== "SUPER_ADMIN") throw new Error("FORBIDDEN");
+  if (!["SUPER_ADMIN", "SUPPORT_ADMIN"].includes(session.user.role)) throw new Error("FORBIDDEN");
   return session;
 }
 
