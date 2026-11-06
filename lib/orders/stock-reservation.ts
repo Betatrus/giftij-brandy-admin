@@ -17,7 +17,7 @@ import type { CartLine } from "@/lib/orders/stock";
  * Successful payment consumes the reservation.
  */
 export const CHECKOUT_RESERVATION_TTL_MS =
-  15 * 60 * 1000;
+  7 * 60 * 1000;
 
 type TxClient =
   | Prisma.TransactionClient
@@ -92,9 +92,17 @@ function normalizeCartLines(
     });
   }
 
-  return Array.from(
-    grouped.values(),
-  );
+  // Stable ordering makes concurrent multi-item reservations acquire
+  // inventory rows in the same order, reducing PostgreSQL deadlock risk.
+  return Array.from(grouped.values()).sort((a, b) => {
+    const aKey = a.variantId
+      ? `variant:${a.variantId}`
+      : `product:${a.productId}`;
+    const bKey = b.variantId
+      ? `variant:${b.variantId}`
+      : `product:${b.productId}`;
+    return aKey.localeCompare(bKey);
+  });
 }
 
 /**
@@ -609,6 +617,7 @@ export async function consumeCheckoutReservation(
 ): Promise<{
   consumed: boolean;
   cart: ReservationCartLine[];
+  reservationId: string | null;
 }> {
   const reservation =
     await tx.checkoutReservation.findUnique(
@@ -621,6 +630,7 @@ export async function consumeCheckoutReservation(
           id: true,
           status: true,
           cart: true,
+          expiresAt: true,
         },
       },
     );
@@ -629,6 +639,7 @@ export async function consumeCheckoutReservation(
     return {
       consumed: false,
       cart: [],
+      reservationId: null,
     };
   }
 
@@ -645,6 +656,7 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart:
         lines,
+      reservationId: reservation.id,
     };
   }
 
@@ -656,6 +668,66 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart:
         lines,
+      reservationId: reservation.id,
+    };
+  }
+
+  /**
+   * Enforce the seven-minute deadline even when the scheduled/opportunistic
+   * cleanup has not run yet. A late successful payment is handled by the
+   * webhook's all-or-nothing paid-order allocation fallback.
+   */
+  if (reservation.expiresAt <= new Date()) {
+    const expiredClaim = await tx.checkoutReservation.updateMany({
+      where: {
+        id: reservation.id,
+        status: "ACTIVE",
+      },
+      data: {
+        status: "RELEASED",
+        releasedAt: new Date(),
+      },
+    });
+
+    if (expiredClaim.count === 1) {
+      for (const line of lines) {
+        if (line.variantId) {
+          const restored = await tx.productVariant.updateMany({
+            where: {
+              id: line.variantId,
+              productId: line.productId,
+              reservedStock: { gte: line.quantity },
+            },
+            data: {
+              reservedStock: { decrement: line.quantity },
+              currentStock: { increment: line.quantity },
+            },
+          });
+          if (restored.count !== 1) {
+            throw new Error(`Unable to release expired reservation for variant ${line.variantId}.`);
+          }
+        } else {
+          const restored = await tx.inventory.updateMany({
+            where: {
+              productId: line.productId,
+              reservedStock: { gte: line.quantity },
+            },
+            data: {
+              reservedStock: { decrement: line.quantity },
+              currentStock: { increment: line.quantity },
+            },
+          });
+          if (restored.count !== 1) {
+            throw new Error(`Unable to release expired reservation for product ${line.productId}.`);
+          }
+        }
+      }
+    }
+
+    return {
+      consumed: false,
+      cart: lines,
+      reservationId: reservation.id,
     };
   }
 
@@ -685,6 +757,7 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart:
         lines,
+      reservationId: reservation.id,
     };
   }
 
@@ -815,6 +888,7 @@ export async function consumeCheckoutReservation(
     consumed: true,
     cart:
       lines,
+    reservationId: reservation.id,
   };
 }
 

@@ -122,6 +122,30 @@ export async function getDashboardOverview() {
     getLowStockCount(),
   ]);
 
+  const paymentReviewLogs = await prisma.activityLog.findMany({
+    where: { action: "PAYMENT_REVIEW_REQUIRED" },
+    orderBy: { createdAt: "desc" },
+    take: 10,
+    select: { id: true, metadata: true, createdAt: true },
+  });
+
+  const paymentReviews = paymentReviewLogs.map((entry) => {
+    const metadata =
+      entry.metadata && typeof entry.metadata === "object" && !Array.isArray(entry.metadata)
+        ? entry.metadata as Record<string, unknown>
+        : {};
+    return {
+      id: entry.id,
+      reference: typeof metadata.reference === "string" ? metadata.reference : "Unavailable",
+      reason: typeof metadata.reason === "string" ? metadata.reason : "Payment requires manual review.",
+      verificationState:
+        metadata.verificationState === "PAYSTACK_VERIFIED"
+          ? "Paystack verified"
+          : "Verification state unavailable",
+      createdAt: entry.createdAt,
+    };
+  });
+
   const todayOrderCount = new Set(
     todaySales.lines
       .filter(
@@ -235,6 +259,7 @@ export async function getDashboardOverview() {
     pendingOrderCount,
     productCount,
     lowStockCount,
+    paymentReviews,
 
     revenue: showFinancials
       ? compare(

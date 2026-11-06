@@ -113,3 +113,41 @@ export async function recordCustomerEvent(
     },
   });
 }
+
+/**
+ * Resolves a customer using the caller's transaction.
+ *
+ * The unique-email upsert is atomic, so two different successful payments
+ * for the same new customer cannot race into duplicate customer creation.
+ * Existing customer profile name/phone are preserved; the latest delivery
+ * address and country are refreshed for a successful order.
+ */
+export async function findOrCreateCustomerByEmailInTransaction(
+  tx: Prisma.TransactionClient,
+  input: {
+    email: string;
+    name: string;
+    phone?: string | null;
+    address?: Prisma.InputJsonValue | null;
+    country?: string | null;
+  },
+) {
+  const email = input.email.trim().toLowerCase();
+  const incomingName = input.name.trim();
+  const incomingPhone = input.phone?.trim() || null;
+
+  return tx.customer.upsert({
+    where: { email },
+    create: {
+      email,
+      name: incomingName || email,
+      phone: incomingPhone,
+      address: input.address ?? undefined,
+      country: input.country ?? null,
+    },
+    update: {
+      ...(input.address ? { address: input.address } : {}),
+      ...(input.country ? { country: input.country } : {}),
+    },
+  });
+}

@@ -15,9 +15,6 @@ import {
 import { checkoutInitializeSchema } from "@/lib/validators/public/checkout";
 import { resolveCartLines } from "@/lib/orders/resolve-cart";
 import {
-  acquireCheckoutSlot,
-} from "@/lib/orders/checkout-concurrency";
-import {
   attachPaymentReferenceToReservation,
   releaseCheckoutReservation,
   releaseExpiredCheckoutReservations,
@@ -31,10 +28,6 @@ export async function POST(
 ) {
   const origin =
     req.headers.get("origin");
-
-  let releaseCheckoutSlot:
-    | (() => void)
-    | null = null;
 
   let reservationId:
     | string
@@ -105,19 +98,6 @@ export async function POST(
       );
 
     /**
-     * Enter the short stock-admission queue.
-     */
-    releaseCheckoutSlot =
-      await acquireCheckoutSlot();
-
-    if (!releaseCheckoutSlot) {
-      throw new ApiError(
-        "RATE_LIMITED",
-        "Checkout is receiving unusually high traffic. Please try again in a moment.",
-      );
-    }
-
-    /**
      * PostgreSQL performs the real admission decision.
      *
      * Reservation:
@@ -153,14 +133,6 @@ export async function POST(
       }
 
       throw error;
-    } finally {
-      /**
-       * The admission queue controls only the stock reservation stage.
-       *
-       * Do not make the next batch wait for Paystack.
-       */
-      releaseCheckoutSlot?.();
-      releaseCheckoutSlot = null;
     }
 
     const amountNaira =
@@ -229,6 +201,9 @@ export async function POST(
             metadata: {
               reservationId,
 
+              // Server-calculated amount in kobo; webhook uses this for verification.
+              expectedAmountKobo: amountKobo,
+
               cart:
                 resolved.map(
                   (line) => ({
@@ -240,6 +215,9 @@ export async function POST(
 
                     quantity:
                       line.quantity,
+
+                    // Immutable server-resolved unit price for order reconciliation.
+                    unitPrice: line.unitPrice,
                   }),
                 ),
 
@@ -341,14 +319,6 @@ export async function POST(
       fail(error),
       origin,
     );
-  } finally {
-    /**
-     * Safety fallback.
-     *
-     * Usually this is already null because admission is released immediately
-     * after the reservation attempt.
-     */
-    releaseCheckoutSlot?.();
   }
 }
 

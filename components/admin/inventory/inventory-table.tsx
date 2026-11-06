@@ -24,8 +24,8 @@ type InventoryRow = {
   categories: { id: string; name: string; slug: string }[];
   variantType: string | null;
   updatedAt: string | Date; // Server Actions pass Date objects through as-is; formatRelativeTime() accepts either
-  base: { id: string; currentStock: number; reservedStock: number; lowStockThreshold: number; stockStatus: StockStatus } | null;
-  variants: { id: string; value: string; sku: string; currentStock: number; reservedStock: number; lowStockThreshold: number; status: string; stockStatus: StockStatus }[];
+  base: { id: string; currentStock: number; reservedStock: number; soldStock: number; lowStockThreshold: number; stockStatus: StockStatus } | null;
+  variants: { id: string; value: string; sku: string; currentStock: number; reservedStock: number; soldStock: number; lowStockThreshold: number; status: string; stockStatus: StockStatus }[];
   totalStock: number;
   stockStatus: StockStatus;
   isLowStock: boolean;
@@ -170,7 +170,7 @@ export function InventoryTable({ categories }: { categories: CategoryOption[] })
                     <span className="block font-body text-xs text-ink/50 mt-0.5">
                       {row.categories.map((c) => c.name).join(", ") || "No category"}
                       {row.variants.length > 0 && ` · ${row.variants.length} option${row.variants.length === 1 ? "" : "s"}`}
-                      {" · Total Stock: "}{row.totalStock}
+                      {" · Physical Stock: "}{row.totalStock}{" · Available: "}{row.base?.currentStock ?? row.variants.reduce((sum, v) => sum + v.currentStock, 0)}
                     </span>
                     <span className="block font-body text-[11px] text-ink/40 mt-0.5">
                       Updated {formatRelativeTime(row.updatedAt)}
@@ -198,40 +198,46 @@ export function InventoryTable({ categories }: { categories: CategoryOption[] })
                 )}
               </div>
 
-              {/* Stock breakdown — Total Stock, Available Stock (what's
-                  actually sellable right now, i.e. Total minus anything
-                  reserved for a pending order), and Low Stock Threshold.
-                  Threshold is only shown for a non-variant product's own
-                  single value — once a product has several variants that
-                  may each carry a different threshold, a single aggregate
-                  number wouldn't be meaningful, so it's shown per-variant
-                  in the list below instead. */}
+              {/* currentStock is already the unreserved/available quantity:
+                  reservation creation decrements currentStock and increments
+                  reservedStock. Show the two separately; never subtract the
+                  reservation a second time. */}
               {row.base ? (
-                <div className="grid grid-cols-3 gap-px bg-cream/60 text-center">
+                <div className="grid grid-cols-4 gap-px bg-cream/60 text-center">
                   <div className="bg-champagne/10 px-2 py-2.5">
-                    <p className="font-display text-sm text-ink">{row.base.currentStock}</p>
-                    <p className="font-body text-[10px] text-ink/50">Total Stock</p>
+                    <p className="font-display text-sm text-ink">{row.base.currentStock + row.base.reservedStock}</p>
+                    <p className="font-body text-[10px] text-ink/50">Physical</p>
                   </div>
                   <div className="bg-champagne/10 px-2 py-2.5">
-                    <p className="font-display text-sm text-ink">{row.base.currentStock - row.base.reservedStock}</p>
+                    <p className="font-display text-sm text-ink">{row.base.currentStock}</p>
                     <p className="font-body text-[10px] text-ink/50">Available</p>
                   </div>
                   <div className="bg-champagne/10 px-2 py-2.5">
-                    <p className="font-display text-sm text-ink">{row.base.lowStockThreshold}</p>
-                    <p className="font-body text-[10px] text-ink/50">Low Stock At</p>
+                    <p className="font-display text-sm text-ink">{row.base.reservedStock}</p>
+                    <p className="font-body text-[10px] text-ink/50">Reserved</p>
+                  </div>
+                  <div className="bg-champagne/10 px-2 py-2.5">
+                    <p className="font-display text-sm text-ink">{row.base.soldStock}</p>
+                    <p className="font-body text-[10px] text-ink/50">Sold</p>
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-px bg-cream/60 text-center">
+                <div className="grid grid-cols-4 gap-px bg-cream/60 text-center">
                   <div className="bg-champagne/10 px-2 py-2.5">
                     <p className="font-display text-sm text-ink">{row.totalStock}</p>
-                    <p className="font-body text-[10px] text-ink/50">Total Stock</p>
+                    <p className="font-body text-[10px] text-ink/50">Physical</p>
                   </div>
                   <div className="bg-champagne/10 px-2 py-2.5">
-                    <p className="font-display text-sm text-ink">
-                      {row.totalStock - row.variants.reduce((s, v) => s + v.reservedStock, 0)}
-                    </p>
+                    <p className="font-display text-sm text-ink">{row.variants.reduce((sum, v) => sum + v.currentStock, 0)}</p>
                     <p className="font-body text-[10px] text-ink/50">Available</p>
+                  </div>
+                  <div className="bg-champagne/10 px-2 py-2.5">
+                    <p className="font-display text-sm text-ink">{row.variants.reduce((sum, v) => sum + v.reservedStock, 0)}</p>
+                    <p className="font-body text-[10px] text-ink/50">Reserved</p>
+                  </div>
+                  <div className="bg-champagne/10 px-2 py-2.5">
+                    <p className="font-display text-sm text-ink">{row.variants.reduce((sum, v) => sum + v.soldStock, 0)}</p>
+                    <p className="font-body text-[10px] text-ink/50">Sold</p>
                   </div>
                 </div>
               )}

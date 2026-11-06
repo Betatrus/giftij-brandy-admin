@@ -84,6 +84,7 @@ export const adjustStockSchema = z
     productId: z.string().min(1),
     ...commonAdjustmentFields,
   })
+  .refine((data) => data.adjustmentReason !== "CUSTOMER_RETURN", { message: "Customer returns must be recorded against the original order item.", path: ["adjustmentReason"] })
   .refine(reasonMatchesChangeType, {
     message:
       "The selected reason does not match this stock action.",
@@ -120,6 +121,7 @@ export const adjustVariantStockSchema = z
     variantId: z.string().min(1),
     ...commonAdjustmentFields,
   })
+  .refine((data) => data.adjustmentReason !== "CUSTOMER_RETURN", { message: "Customer returns must be recorded against the original order item.", path: ["adjustmentReason"] })
   .refine(reasonMatchesChangeType, {
     message:
       "The selected reason does not match this stock action.",
@@ -158,6 +160,7 @@ const bulkAdjustmentLineSchema = z
     productId: z.string().min(1),
     ...commonAdjustmentFields,
   })
+  .refine((data) => data.adjustmentReason !== "CUSTOMER_RETURN", { message: "Customer returns must be recorded against the original order item.", path: ["adjustmentReason"] })
   .refine(reasonMatchesChangeType, {
     message:
       "The selected reason does not match this stock action.",
@@ -184,3 +187,18 @@ export const bulkAdjustStockSchema =
 
 export type BulkAdjustStockInput =
   z.infer<typeof bulkAdjustStockSchema>;
+
+export const recordCustomerReturnSchema = z.object({
+  orderItemId: z.string().min(1),
+  quantity: z.coerce.number().int().min(1),
+  restockQuantity: z.coerce.number().int().min(0),
+  refundStatus: z.enum(["NOT_REQUIRED", "PENDING", "COMPLETED"]),
+  refundAmount: z.coerce.number().min(0).optional(),
+  businessDate: businessDateSchema,
+  note: z.string().max(1000).optional(),
+}).refine((data) => data.restockQuantity <= data.quantity, {
+  message: "Restock quantity cannot exceed the quantity returned.",
+  path: ["restockQuantity"],
+});
+
+export type RecordCustomerReturnInput = z.infer<typeof recordCustomerReturnSchema>;

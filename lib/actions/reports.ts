@@ -27,9 +27,19 @@ async function requireReportsAccess() {
  * from this total" instead of silently under-reporting.
  */
 export async function getSalesReport(filters: ReportFiltersInput) {
-  await requireReportsAccess();
+  const session = await requireReportsAccess();
+  const canSeeFinancials = hasPermission(session.user.role, "reports:read:financials");
   const parsed = reportFiltersSchema.parse(filters);
-  const { lines, truncated, unknownRevenueCount } = await getUnifiedSalesLines(parsed);
+  const { lines: rawLines, truncated, unknownRevenueCount } = await getUnifiedSalesLines(parsed);
+  // Refund cash amounts are restricted just like the dedicated returns report.
+  const lines = rawLines.map((line) => ({
+    ...line,
+    actualRefundAmount: canSeeFinancials ? line.actualRefundAmount : null,
+    returnDetails: line.returnDetails.map((entry) => ({
+      ...entry,
+      refundAmount: canSeeFinancials ? entry.refundAmount : null,
+    })),
+  }));
 
   const summary = {
     lineCount: lines.length,
@@ -261,3 +271,45 @@ export async function getFinancialReport(filters: ReportFiltersInput) {
     truncated,
   };
 }
+
+
+export async function getCustomerReturnsReport() {
+  const session = await requireReportsAccess();
+  const canSeeFinancials = hasPermission(session.user.role, "reports:read:financials");
+  const returns = await prisma.customerReturn.findMany({
+    orderBy: [{ businessDate: "desc" }, { createdAt: "desc" }],
+    take: REPORT_ROW_CAP,
+    include: {
+      order: { select: { orderNumber: true, customer: { select: { name: true, email: true } } } },
+      orderItem: { select: { product: { select: { name: true, sku: true } }, variant: { select: { value: true } } } },
+      processedBy: { select: { name: true, email: true } },
+    },
+  });
+  const rows = returns.map((entry) => ({
+    id: entry.id,
+    date: entry.businessDate,
+    orderNumber: entry.order.orderNumber,
+    customerName: entry.order.customer.name,
+    customerEmail: entry.order.customer.email,
+    productName: entry.orderItem.product.name,
+    sku: entry.orderItem.product.sku,
+    variant: entry.orderItem.variant?.value ?? "",
+    quantity: entry.quantity,
+    restockQuantity: entry.restockQuantity,
+    refundAmount: !canSeeFinancials || entry.refundAmount === null ? null : Number(entry.refundAmount),
+    refundStatus: entry.refundStatus,
+    note: entry.note ?? "",
+    processedBy: entry.processedBy.name || entry.processedBy.email,
+  }));
+  return {
+    rows,
+    summary: {
+      returnCount: rows.length,
+      unitsReturned: rows.reduce((sum, row) => sum + row.quantity, 0),
+      unitsRestocked: rows.reduce((sum, row) => sum + row.restockQuantity, 0),
+      refundAmount: canSeeFinancials ? rows.reduce((sum, row) => sum + (row.refundAmount ?? 0), 0) : null,
+    },
+    truncated: returns.length >= REPORT_ROW_CAP,
+  };
+}
+

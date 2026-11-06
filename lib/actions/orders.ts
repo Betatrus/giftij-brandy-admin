@@ -7,7 +7,6 @@ import {
   stripFinancialFields,
   stripFinancialFieldsFromList,
 } from "@/lib/permissions";
-import { logActivity } from "@/lib/activity-log";
 import {
   getPagination,
   getPageCount,
@@ -352,22 +351,19 @@ export async function markOrderProcessingOnView(
             "Order Viewed - now Processing",
         },
       });
+      await tx.activityLog.create({
+        data: {
+          userId: session.user.id,
+          action: "ORDER_STATUS_UPDATE",
+          resource: `Order:${id}`,
+          metadata: { from: "PENDING", to: "PROCESSING", trigger: "viewed" },
+        },
+      });
 
       return true;
     });
 
   if (changed) {
-    await logActivity({
-      userId: session.user.id,
-      action: "ORDER_STATUS_UPDATE",
-      resource: `Order:${id}`,
-      metadata: {
-        from: "PENDING",
-        to: "PROCESSING",
-        trigger: "viewed",
-      },
-    });
-
     revalidatePath("/admin/orders");
     revalidatePath(
       `/admin/orders/${id}`
@@ -411,33 +407,42 @@ export async function completeOrder(
     "COMPLETED"
   );
 
-  await prisma.$transaction([
-    prisma.order.update({
+  await prisma.$transaction(async (tx) => {
+    // A paid order awaiting stock resolution must never be marked complete.
+    // The conditional update also protects against a concurrent cancellation
+    // or stock-resolution change between the initial read and this write.
+    const changed = await tx.order.updateMany({
       where: {
         id,
+        status: "PROCESSING",
+        stockUnavailable: false,
+        cancellationReviewStatus: { in: ["NONE", "REJECTED"] },
       },
-
       data: {
         status: "DELIVERED",
       },
-    }),
+    });
 
-    prisma.orderEvent.create({
+    if (changed.count !== 1) {
+      throw new Error(
+        "This order cannot be completed. Confirm that it is processing and all required stock has been allocated.",
+      );
+    }
+
+    await tx.orderEvent.create({
       data: {
         orderId: id,
         label: "Order Completed",
       },
-    }),
-  ]);
-
-  await logActivity({
-    userId: session.user.id,
-    action: "ORDER_STATUS_UPDATE",
-    resource: `Order:${id}`,
-    metadata: {
-      from,
-      to: "COMPLETED",
-    },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_STATUS_UPDATE",
+        resource: `Order:${id}`,
+        metadata: { from, to: "COMPLETED" },
+      },
+    });
   });
 
   revalidatePath("/admin/orders");
@@ -445,6 +450,179 @@ export async function completeOrder(
     `/admin/orders/${id}`
   );
   revalidateTag("orders");
+}
+
+/**
+ * Allocate inventory for a paid order that could not claim stock when
+ * Paystack confirmed payment. Stock must already have been received through
+ * the normal inventory receiving workflow before this action is used.
+ *
+ * The order row and stock rows are locked in one transaction. The stock flag
+ * is cleared only after every line has been allocated successfully.
+ */
+export async function resolveStockUnavailableOrder(id: string) {
+  const session = await requireSession();
+
+  if (
+    !hasPermission(session.user.role, "orders:write") ||
+    !hasPermission(session.user.role, "inventory:write")
+  ) {
+    throw new Error("FORBIDDEN: order and inventory permissions are required to allocate stock.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const lockedOrder = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "Order" WHERE "id" = ${id} FOR UPDATE
+    `;
+    if (!lockedOrder.length) throw new Error("Order not found.");
+
+    const order = await tx.order.findUniqueOrThrow({
+      where: { id },
+      select: {
+        id: true,
+        orderNumber: true,
+        status: true,
+        paymentReference: true,
+        stockUnavailable: true,
+        cancellationReviewStatus: true,
+        items: {
+          select: { id: true, productId: true, variantId: true, quantity: true },
+        },
+      },
+    });
+
+    if (!order.stockUnavailable) {
+      throw new Error("This order has already been allocated or does not require stock resolution.");
+    }
+    if (!order.paymentReference) {
+      throw new Error("This order has no verified payment reference and cannot receive stock allocation.");
+    }
+    if (!["PENDING", "PROCESSING"].includes(order.status)) {
+      throw new Error("Only active paid orders can have stock allocated.");
+    }
+    if (order.cancellationReviewStatus === "REQUESTED" || order.cancellationReviewStatus === "APPROVED") {
+      throw new Error("Resolve or reject the cancellation review before allocating stock.");
+    }
+    if (order.items.length === 0) throw new Error("This order has no items to allocate.");
+
+    const grouped = new Map<string, { productId: string; variantId: string | null; quantity: number }>();
+    for (const item of order.items) {
+      const key = item.variantId ? `variant:${item.variantId}` : `product:${item.productId}`;
+      const existing = grouped.get(key);
+      if (existing) existing.quantity += item.quantity;
+      else grouped.set(key, { productId: item.productId, variantId: item.variantId, quantity: item.quantity });
+    }
+    const lines = [...grouped.values()].sort((a, b) =>
+      (a.variantId ? `variant:${a.variantId}` : `product:${a.productId}`).localeCompare(
+        b.variantId ? `variant:${b.variantId}` : `product:${b.productId}`,
+      ),
+    );
+
+    // Lock every required stock row first and validate the complete order.
+    for (const line of lines) {
+      if (line.variantId) {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "ProductVariant" WHERE "id" = ${line.variantId} AND "productId" = ${line.productId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error(`A required product variant no longer exists (${line.variantId}).`);
+        const variant = await tx.productVariant.findUniqueOrThrow({
+          where: { id: line.variantId },
+          select: { currentStock: true },
+        });
+        if (variant.currentStock < line.quantity) {
+          throw new Error(`Insufficient stock for variant ${line.variantId}: need ${line.quantity}, available ${variant.currentStock}. Receive the missing stock first.`);
+        }
+      } else {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "Inventory" WHERE "productId" = ${line.productId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error(`Inventory record not found for product ${line.productId}.`);
+        const inventory = await tx.inventory.findUniqueOrThrow({
+          where: { productId: line.productId },
+          select: { currentStock: true },
+        });
+        if (inventory.currentStock < line.quantity) {
+          throw new Error(`Insufficient stock for product ${line.productId}: need ${line.quantity}, available ${inventory.currentStock}. Receive the missing stock first.`);
+        }
+      }
+    }
+
+    // All lines are available and locked. Deduct them atomically.
+    for (const line of lines) {
+      if (line.variantId) {
+        const updated = await tx.productVariant.updateMany({
+          where: { id: line.variantId, productId: line.productId, currentStock: { gte: line.quantity } },
+          data: { currentStock: { decrement: line.quantity }, soldStock: { increment: line.quantity } },
+        });
+        if (updated.count !== 1) throw new Error("Stock changed while allocating this order. No allocation was committed; refresh and try again.");
+        await tx.variantInventoryLog.create({
+          data: {
+            variantId: line.variantId,
+            changeType: "DECREASE",
+            quantity: line.quantity,
+            reason: `[ONLINE_SALE][STOCK_RESOLUTION] Paid order ${order.orderNumber}`,
+            performedById: session.user.id,
+          },
+        });
+      } else {
+        const updated = await tx.inventory.updateMany({
+          where: { productId: line.productId, currentStock: { gte: line.quantity } },
+          data: { currentStock: { decrement: line.quantity }, soldStock: { increment: line.quantity } },
+        });
+        if (updated.count !== 1) throw new Error("Stock changed while allocating this order. No allocation was committed; refresh and try again.");
+        const inventory = await tx.inventory.findUniqueOrThrow({
+          where: { productId: line.productId },
+          select: { id: true },
+        });
+        await tx.inventoryLog.create({
+          data: {
+            inventoryId: inventory.id,
+            changeType: "DECREASE",
+            quantity: line.quantity,
+            reason: `[ONLINE_SALE][STOCK_RESOLUTION] Paid order ${order.orderNumber}`,
+            performedById: session.user.id,
+          },
+        });
+      }
+    }
+
+    await tx.order.update({
+      where: { id },
+      data: { stockUnavailable: false },
+    });
+    await tx.orderNote.create({
+      data: {
+        orderId: id,
+        note: `STOCK RESOLVED: Full order quantity allocated from received inventory by ${session.user.name ?? session.user.email ?? "an administrator"}.`,
+        createdBy: session.user.id,
+      },
+    });
+    await tx.orderEvent.create({
+      data: { orderId: id, label: "Stock Allocated — Order Ready for Fulfilment" },
+    });
+
+    // Keep the durable activity audit in the same transaction as stock
+    // allocation. If this write fails, the inventory changes and order flag
+    // update roll back together rather than reporting a false failure.
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_STOCK_UNAVAILABLE_RESOLVED",
+        resource: `Order:${id}`,
+        metadata: {
+          orderNumber: order.orderNumber,
+          itemCount: order.items.length,
+          stockAllocated: true,
+        },
+      },
+    });
+  });
+
+  revalidatePath("/admin/orders");
+  revalidatePath(`/admin/orders/${id}`);
+  revalidatePath("/admin/inventory");
+  revalidateTag("orders");
+  revalidateTag("products");
 }
 
 /**
@@ -461,171 +639,148 @@ export async function cancelOrder(
     );
   }
 
-  const existing =
-    await prisma.order.findUniqueOrThrow({
+  const existing = await prisma.order.findUniqueOrThrow({
+    where: { id },
+    select: { id: true, status: true, cancellationReviewStatus: true },
+  });
+
+  if (!["PENDING", "PROCESSING"].includes(existing.status)) {
+    throw new Error("Only active pending or processing orders can enter cancellation review.");
+  }
+  if (existing.cancellationReviewStatus === "REQUESTED") {
+    throw new Error("A cancellation review is already pending for this order.");
+  }
+
+  // This action only starts a review. It must never cancel, refund, or
+  // restore inventory by itself; those are separate approved operations.
+  // The conditional update prevents stale tabs or concurrent requests from
+  // reopening a completed/cancelled order or creating duplicate reviews.
+  await prisma.$transaction(async (tx) => {
+    const changed = await tx.order.updateMany({
       where: {
         id,
+        status: { in: ["PENDING", "PROCESSING"] },
+        cancellationReviewStatus: { in: ["NONE", "REJECTED"] },
       },
-
-      include: {
-        items: true,
+      data: {
+        cancellationReviewStatus: "REQUESTED",
+        cancellationRequestedAt: new Date(),
+        cancellationRequestedBy: session.user.id,
       },
     });
 
-  const from =
-    fromSchemaOrderStatus(
-      existing.status
-    );
-
-  assertValidOrderTransition(
-    from,
-    "CANCELLED"
-  );
-
-  await prisma.$transaction(
-    async (tx) => {
-      for (const item of existing.items) {
-        if (item.variantId) {
-          const variant =
-            await tx.productVariant.findUniqueOrThrow(
-              {
-                where: {
-                  id: item.variantId,
-                },
-              }
-            );
-
-          await tx.productVariant.update({
-            where: {
-              id: item.variantId,
-            },
-
-            data: {
-              currentStock:
-                variant.currentStock +
-                item.quantity,
-
-              soldStock: Math.max(
-                0,
-                variant.soldStock -
-                  item.quantity
-              ),
-
-              returnedStock:
-                variant.returnedStock +
-                item.quantity,
-            },
-          });
-
-          await tx.variantInventoryLog.create({
-            data: {
-              variantId:
-                item.variantId,
-
-              changeType:
-                "RETURN",
-
-              quantity:
-                item.quantity,
-
-              reason:
-                "[ORDER_CANCELLED] Restocked on cancellation",
-            },
-          });
-        } else {
-          const inventory =
-            await tx.inventory.findUniqueOrThrow(
-              {
-                where: {
-                  productId:
-                    item.productId,
-                },
-              }
-            );
-
-          await tx.inventory.update({
-            where: {
-              productId:
-                item.productId,
-            },
-
-            data: {
-              currentStock:
-                inventory.currentStock +
-                item.quantity,
-
-              soldStock: Math.max(
-                0,
-                inventory.soldStock -
-                  item.quantity
-              ),
-
-              returnedStock:
-                inventory.returnedStock +
-                item.quantity,
-            },
-          });
-
-          await tx.inventoryLog.create({
-            data: {
-              inventoryId:
-                inventory.id,
-
-              changeType:
-                "RETURN",
-
-              quantity:
-                item.quantity,
-
-              reason:
-                "[ORDER_CANCELLED] Restocked on cancellation",
-            },
-          });
-        }
-      }
-
-      await tx.order.update({
-        where: {
-          id,
-        },
-
-        data: {
-          status: "CANCELLED",
-        },
-      });
-
-      await tx.orderEvent.create({
-        data: {
-          orderId: id,
-          label: "Order Cancelled",
-        },
-      });
+    if (changed.count !== 1) {
+      throw new Error("This order is no longer eligible for cancellation review.");
     }
-  );
 
-  await logActivity({
-    userId: session.user.id,
-    action: "ORDER_STATUS_UPDATE",
-    resource: `Order:${id}`,
-    metadata: {
-      from,
-      to: "CANCELLED",
-      restocked: true,
-    },
+    await tx.orderNote.create({
+      data: {
+        orderId: id,
+        note:
+          "CANCELLATION REVIEW REQUESTED by an administrator. Order status, payment and inventory remain unchanged until an authorised reviewer decides the request.",
+        createdBy: session.user.id,
+      },
+    });
+
+    await tx.orderEvent.create({
+      data: {
+        orderId: id,
+        label: "Cancellation Review Requested",
+      },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_CANCELLATION_REVIEW_REQUESTED",
+        resource: `Order:${id}`,
+        metadata: {
+          orderStatusUnchanged: existing.status,
+          inventoryRestored: false,
+          refundInitiated: false,
+        },
+      },
+    });
   });
 
   revalidatePath("/admin/orders");
-
-  revalidatePath(
-    `/admin/orders/${id}`
-  );
-
-  revalidatePath(
-    "/admin/inventory"
-  );
-
+  revalidatePath(`/admin/orders/${id}`);
   revalidateTag("orders");
-  revalidateTag("products");
+}
+
+/**
+ * Resolve a pending cancellation review. Approval changes fulfilment status
+ * only; it never issues a payment refund or restores inventory.
+ */
+export async function resolveCancellationReview(
+  id: string,
+  decision: "APPROVE" | "REJECT",
+  reason: string
+) {
+  const session = await requireSession();
+
+  if (!hasPermission(session.user.role, "orders:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to resolve cancellation reviews");
+  }
+
+  const cleanReason = reason.trim();
+  if (cleanReason.length < 3) {
+    throw new Error("Please provide a reason of at least 3 characters.");
+  }
+
+  await prisma.$transaction(async (tx) => {
+    // Both decisions require an order that is still active. A stale review
+    // must not be rejected after the order has already been completed or
+    // cancelled by another action.
+    const where: Prisma.OrderWhereInput = {
+      id,
+      status: { in: ["PENDING", "PROCESSING"] },
+      cancellationReviewStatus: "REQUESTED",
+    };
+
+    const changed = await tx.order.updateMany({
+      where,
+      data: {
+        cancellationReviewStatus: decision === "APPROVE" ? "APPROVED" : "REJECTED",
+        ...(decision === "APPROVE" ? { status: "CANCELLED" as const } : {}),
+      },
+    });
+
+    if (changed.count !== 1) {
+      throw new Error("This cancellation review is no longer pending or the order can no longer be cancelled.");
+    }
+
+    await tx.orderNote.create({
+      data: {
+        orderId: id,
+        note: `CANCELLATION REVIEW ${decision === "APPROVE" ? "APPROVED" : "REJECTED"}: ${cleanReason}. No automatic refund or inventory restoration was performed.`,
+        createdBy: session.user.id,
+      },
+    });
+
+    await tx.orderEvent.create({
+      data: {
+        orderId: id,
+        label: decision === "APPROVE" ? "Cancellation Review Approved" : "Cancellation Review Rejected",
+      },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: decision === "APPROVE" ? "ORDER_CANCELLATION_REVIEW_APPROVED" : "ORDER_CANCELLATION_REVIEW_REJECTED",
+        resource: `Order:${id}`,
+        metadata: {
+          decision,
+          reason: cleanReason,
+          refundInitiated: false,
+          inventoryRestored: false,
+        },
+      },
+    });
+  });
+
+  revalidatePath("/admin/orders");
+  revalidatePath(`/admin/orders/${id}`);
+  revalidateTag("orders");
 }
 
 export async function addOrderNote(input: {
@@ -646,26 +801,21 @@ export async function addOrderNote(input: {
       input
     );
 
-  await prisma.orderNote.create({
-    data: {
-      orderId:
-        parsed.orderId,
-
-      note:
-        parsed.note,
-
-      createdBy:
-        session.user.id,
-    },
-  });
-
-  await logActivity({
-    userId: session.user.id,
-    action:
-      "ORDER_NOTE_ADDED",
-
-    resource:
-      `Order:${parsed.orderId}`,
+  await prisma.$transaction(async (tx) => {
+    await tx.orderNote.create({
+      data: {
+        orderId: parsed.orderId,
+        note: parsed.note,
+        createdBy: session.user.id,
+      },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "ORDER_NOTE_ADDED",
+        resource: `Order:${parsed.orderId}`,
+      },
+    });
   });
 
   revalidatePath(

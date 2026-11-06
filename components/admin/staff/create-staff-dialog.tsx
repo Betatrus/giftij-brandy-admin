@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { createStaff } from "@/lib/actions/staff";
 
-export function CreateStaffDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+export function CreateStaffDialog({ onClose, onDone, canAssignElevatedRoles }: { onClose: () => void; onDone: () => void; canAssignElevatedRoles: boolean }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"SUPER_ADMIN" | "SUPPORT_ADMIN">("SUPPORT_ADMIN");
+  const [role, setRole] = useState<"SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN">("SUPPORT_ADMIN");
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
 
@@ -56,11 +56,12 @@ export function CreateStaffDialog({ onClose, onDone }: { onClose: () => void; on
         <label className="font-body text-sm text-ink/70">Role</label>
         <select
           value={role}
-          onChange={(e) => setRole(e.target.value as "SUPER_ADMIN" | "SUPPORT_ADMIN")}
+          onChange={(e) => setRole(e.target.value as "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN")}
           className="w-full mt-1 mb-4 rounded-xl border border-cream px-3 py-2 font-body text-sm bg-white"
         >
           <option value="SUPPORT_ADMIN">Support Admin</option>
-          <option value="SUPER_ADMIN">Super Admin</option>
+          {canAssignElevatedRoles && <option value="TECHNICAL_SUPPORT">Technical Support</option>}
+          {canAssignElevatedRoles && <option value="SUPER_ADMIN">Super Admin</option>}
         </select>
 
         {error && <p className="text-xs text-red-600 mb-3">{error}</p>}

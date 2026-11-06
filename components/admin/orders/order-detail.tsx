@@ -10,6 +10,8 @@ import {
   markOrderProcessingOnView,
   completeOrder,
   cancelOrder,
+  resolveCancellationReview,
+  resolveStockUnavailableOrder,
   addOrderNote,
 } from "@/lib/actions/orders";
 import {
@@ -35,6 +37,8 @@ type OrderDetailData = {
 
   shippingAddress: unknown;
   paymentReference: string | null;
+  stockUnavailable: boolean;
+  cancellationReviewStatus: "NONE" | "REQUESTED" | "APPROVED" | "REJECTED";
 
   items: {
     id: string;
@@ -95,6 +99,9 @@ export function OrderDetail({
   ] = useState(false);
 
   const [note, setNote] =
+    useState("");
+
+  const [cancellationReason, setCancellationReason] =
     useState("");
 
   const [error, setError] =
@@ -178,6 +185,23 @@ export function OrderDetail({
     }
   }
 
+  async function handleResolveStock() {
+    setError(null);
+    setIsPending(true);
+    try {
+      await resolveStockUnavailableOrder(order.id);
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not allocate stock for this order."
+      );
+    } finally {
+      setIsPending(false);
+    }
+  }
+
   async function handleCancel() {
     setError(null);
     setIsPending(true);
@@ -194,7 +218,30 @@ export function OrderDetail({
       setError(
         err instanceof Error
           ? err.message
-          : "Failed to cancel order."
+          : "Failed to request cancellation review."
+      );
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleCancellationDecision(decision: "APPROVE" | "REJECT") {
+    setError(null);
+    setIsPending(true);
+
+    try {
+      await resolveCancellationReview(
+        order.id,
+        decision,
+        cancellationReason
+      );
+      setCancellationReason("");
+      router.refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to resolve cancellation review."
       );
     } finally {
       setIsPending(false);
@@ -272,6 +319,24 @@ export function OrderDetail({
         </div>
       )}
 
+      {order.stockUnavailable && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950">
+          <p className="font-body text-sm font-semibold">Payment received — stock unavailable</p>
+          <p className="font-body text-sm mt-1">
+            Paystack confirmed this payment, but the full order quantity could not be allocated.
+            No inventory was deducted. Source or receive the missing items through Inventory first,
+            then allocate the complete order here. This action does not issue a refund.
+          </p>
+          <button
+            onClick={handleResolveStock}
+            disabled={isPending || markingViewed || order.cancellationReviewStatus === "REQUESTED" || order.cancellationReviewStatus === "APPROVED"}
+            className="mt-3 rounded-xl bg-amber-900 text-white font-body text-sm px-4 py-2 disabled:opacity-50"
+          >
+            {isPending ? "Allocating stock..." : "Allocate received stock to this order"}
+          </button>
+        </div>
+      )}
+
       <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
@@ -301,6 +366,9 @@ export function OrderDetail({
                 : order.adminStatus
             }
           />
+          {order.cancellationReviewStatus === "REQUESTED" && (
+            <Badge label="Cancellation Review Pending" tone="LOW_STOCK" />
+          )}
         </div>
 
         {markingViewed && (
@@ -330,7 +398,8 @@ export function OrderDetail({
           {(order.adminStatus ===
             "PENDING" ||
             order.adminStatus ===
-              "PROCESSING") && (
+              "PROCESSING") &&
+            order.cancellationReviewStatus !== "REQUESTED" && (
             <button
               onClick={() =>
                 setConfirmCancel(
@@ -343,10 +412,44 @@ export function OrderDetail({
               }
               className="rounded-xl border border-red-200 text-red-600 font-body text-sm px-4 py-2 disabled:opacity-60"
             >
-              Cancel Order
+              Request Cancellation Review
             </button>
           )}
         </div>
+
+        {order.cancellationReviewStatus === "REQUESTED" && (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+            <p className="font-body text-sm font-semibold text-amber-950">
+              Cancellation review requires a decision
+            </p>
+            <p className="font-body text-xs text-amber-900">
+              Approval cancels the order only. Refunds and inventory restoration remain separate manual workflows.
+            </p>
+            <textarea
+              value={cancellationReason}
+              onChange={(event) => setCancellationReason(event.target.value)}
+              placeholder="Record the reason for approving or rejecting this request..."
+              rows={3}
+              className="w-full rounded-xl border border-amber-200 bg-white px-3 py-2 text-sm font-body"
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => handleCancellationDecision("APPROVE")}
+                disabled={isPending || cancellationReason.trim().length < 3 || order.adminStatus === "COMPLETED" || order.adminStatus === "CANCELLED"}
+                className="rounded-xl bg-red-600 text-white font-body text-sm px-4 py-2 disabled:opacity-50"
+              >
+                Approve Cancellation
+              </button>
+              <button
+                onClick={() => handleCancellationDecision("REJECT")}
+                disabled={isPending || cancellationReason.trim().length < 3}
+                className="rounded-xl border border-ink/20 text-ink font-body text-sm px-4 py-2 disabled:opacity-50"
+              >
+                Reject Request
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
@@ -558,9 +661,9 @@ export function OrderDetail({
 
       <ConfirmDialog
         open={confirmCancel}
-        title="Cancel this order?"
-        description="This restocks every item on the order back into inventory. This cannot be undone."
-        confirmLabel="Cancel Order"
+        title="Request cancellation review?"
+        description="This sends the order for admin review. The order will not be cancelled, refunded, or restocked until those actions are separately approved."
+        confirmLabel="Request Review"
         danger
         onConfirm={
           handleCancel

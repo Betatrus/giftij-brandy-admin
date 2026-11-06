@@ -377,6 +377,26 @@ export function AnalyticsDashboard({
 
           <section>
             <div className="mb-3">
+              <h2 className="font-body text-sm font-medium text-ink">Customer returns</h2>
+              <p className="mt-0.5 font-body text-xs text-ink/40">Returns recorded in the selected period. These figures are separate from sales and units sold.</p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard label="Return Records" value={data.customerReturns.recordCount.toLocaleString("en-NG")} />
+              <MetricCard label="Units Returned" value={data.customerReturns.unitsReturned.toLocaleString("en-NG")} />
+              <MetricCard label="Units Restocked" value={data.customerReturns.unitsRestocked.toLocaleString("en-NG")} />
+              <MetricCard label="Completed Refunds" value={data.customerReturns.completedRefundCount.toLocaleString("en-NG")} />
+              <MetricCard label="Pending Refunds" value={data.customerReturns.pendingRefundCount.toLocaleString("en-NG")} />
+              {data.customerReturns.completedRefundAmount !== null && (
+                <MetricCard label="Refunds Completed" value={formatNaira(data.customerReturns.completedRefundAmount)} />
+              )}
+              {data.customerReturns.pendingRefundAmount !== null && (
+                <MetricCard label="Pending Refund Value" value={formatNaira(data.customerReturns.pendingRefundAmount)} />
+              )}
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-3">
               <h2 className="font-body text-sm font-medium text-ink">
                 Order status
               </h2>

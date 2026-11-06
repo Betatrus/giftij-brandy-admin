@@ -48,7 +48,7 @@ const SORT_MAP: Record<
  * revalidateTag("products") on commit, so this remains effectively
  * real-time while still giving repeated identical requests a cache hit.
  *
- * Cache key v2 contains the variant-image-aware public DTO.
+ * Cache key v3 contains the full active-variant summary needed by storefront cards.
  */
 const getCachedProductList = unstable_cache(
   async (query: {
@@ -157,7 +157,7 @@ const getCachedProductList = unstable_cache(
     };
   },
 
-  ["public-product-list-v2"],
+  ["public-product-list-v3"],
 
   {
     tags: ["products"],

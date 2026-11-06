@@ -3,11 +3,15 @@ import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 import { ChangePasswordForm } from "@/components/admin/settings/change-password-form";
 import { CustomerCareWhatsAppForm } from "@/components/admin/settings/customer-care-whatsapp-form";
+import { BlogVisibilityForm } from "@/components/admin/settings/blog-visibility-form";
+import { getStoreSettings } from "@/lib/actions/settings";
 
 export default async function SettingsPage() {
   const session = await auth();
-  const isSuperAdmin = session?.user?.role === "SUPER_ADMIN";
+  const isSuperAdmin = session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "TECHNICAL_SUPPORT";
   const whatsapp = isSuperAdmin ? await getCustomerCareWhatsApp() : null;
+  const canManageBlog = session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "TECHNICAL_SUPPORT" || session?.user?.role === "SUPPORT_ADMIN";
+  const storeSettings = canManageBlog ? await getStoreSettings() : null;
 
   return (
     <div>
@@ -31,6 +35,14 @@ export default async function SettingsPage() {
               Shown to customers when something they want is low or out of stock.
             </p>
             <CustomerCareWhatsAppForm initialNumber={whatsapp} />
+          </section>
+        )}
+
+        {canManageBlog && storeSettings && (
+          <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
+            <h2 className="font-body text-sm font-medium text-ink mb-2">Blog visibility & search indexing</h2>
+            <p className="font-body text-xs text-ink/50 mb-4">Control storefront navigation and whether eligible published articles can be indexed.</p>
+            <BlogVisibilityForm navigationVisible={storeSettings.blogNavigationVisible} indexingEnabled={storeSettings.blogIndexingEnabled} />
           </section>
         )}
 

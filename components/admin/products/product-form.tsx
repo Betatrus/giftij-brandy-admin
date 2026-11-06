@@ -7,10 +7,11 @@ import { useState, useEffect } from "react";
 import { StaffRole } from "@prisma/client";
 import { productSchema, type ProductInput } from "@/lib/validators/product";
 import { createProduct, updateProduct } from "@/lib/actions/products";
-import { uploadProductImage, uploadVariantImage } from "@/lib/actions/media";
+import { attachProductImage, replaceVariantImage } from "@/lib/actions/media";
+import { uploadFileDirectToCloudinary } from "@/lib/media/cloudinary-client";
 import { VariantsSection } from "./variants-section";
 import { ImageUploader } from "./image-uploader";
-import { StagedImagePicker, fileToBase64, type StagedImage } from "./staged-image-picker";
+import { StagedImagePicker, type StagedImage } from "./staged-image-picker";
 import { CategorySelect } from "./category-select";
 import { ProductPreview } from "./product-preview";
 import { ProductSaveResultDialog } from "./product-save-result-dialog";
@@ -206,12 +207,24 @@ export function ProductForm({
           setUploadStatus({ done: 0, total: uploadQueue.length });
           for (let i = 0; i < uploadQueue.length; i++) {
             try {
-              const base64 = await fileToBase64(uploadQueue[i].file);
+              // Use the same signed browser-to-Cloudinary upload path as the
+              // existing-product editor. Image bytes never pass through a
+              // Server Action request body.
+              const uploaded = await uploadFileDirectToCloudinary(uploadQueue[i].file);
               const target = uploadQueue[i].target;
-              if (target.kind === "product") {
-                await uploadProductImage({ productId: created.id, fileBase64: base64 });
-              } else {
-                await uploadVariantImage({ variantIds: target.variantIds, productId: created.id, fileBase64: base64 });
+              const result = target.kind === "product"
+                ? await attachProductImage({
+                    productId: created.id,
+                    cloudinaryId: uploaded.cloudinaryId,
+                  })
+                : await replaceVariantImage({
+                    variantIds: target.variantIds,
+                    productId: created.id,
+                    cloudinaryId: uploaded.cloudinaryId,
+                  });
+
+              if (!result.ok) {
+                throw new Error(result.error);
               }
             } catch {
               failedCount++;

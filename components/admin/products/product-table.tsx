@@ -5,7 +5,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { StaffRole } from "@prisma/client";
-import { listProducts, archiveProduct, deleteProduct } from "@/lib/actions/products";
+import { listProducts, archiveProduct, deleteProduct, setProductAvailability } from "@/lib/actions/products";
 import { SearchInput } from "@/components/ui/search-input";
 import { Pagination } from "@/components/ui/pagination";
 import { Badge } from "@/components/ui/badge";
@@ -21,8 +21,8 @@ type ProductRow = {
   status: string;
   price: number | null;
   images: { url: string }[];
-  inventory: { currentStock: number; soldStock: number; lowStockThreshold: number } | null;
-  variants: { id: string; currentStock: number; soldStock: number; lowStockThreshold: number }[];
+  inventory: { currentStock: number; reservedStock: number; soldStock: number; lowStockThreshold: number } | null;
+  variants: { id: string; currentStock: number; reservedStock: number; soldStock: number; lowStockThreshold: number }[];
   featuredFlags: string[];
 };
 
@@ -132,6 +132,19 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
       await load();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to archive selected products.");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleAvailabilityChange(id: string, active: boolean) {
+    setActionError(null);
+    setIsPending(true);
+    try {
+      await setProductAvailability(id, active);
+      await load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not update product availability.");
     } finally {
       setIsPending(false);
     }
@@ -306,12 +319,20 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                           Edit
                         </Link>
                       )}
-                      {canWrite && p.status !== "ARCHIVED" && (
+                      {canWrite && (
                         <button
-                          onClick={() => setConfirmTarget({ id: p.id, mode: "archive" })}
-                          className="text-ink/50 hover:text-ink text-xs underline"
+                          type="button"
+                          role="switch"
+                          aria-checked={p.status === "ACTIVE"}
+                          aria-label={`${p.status === "ACTIVE" ? "Deactivate" : "Activate"} ${p.name}`}
+                          disabled={isPending}
+                          onClick={() => handleAvailabilityChange(p.id, p.status !== "ACTIVE")}
+                          className={`inline-flex items-center gap-2 text-xs ${isPending ? "opacity-50" : ""}`}
                         >
-                          Archive
+                          <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${p.status === "ACTIVE" ? "bg-emerald-600" : "bg-gray-300"}`}>
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${p.status === "ACTIVE" ? "translate-x-4" : "translate-x-0.5"}`} />
+                          </span>
+                          <span>{p.status === "ACTIVE" ? "On" : "Off"}</span>
                         </button>
                       )}
                       {canWrite && (
@@ -393,14 +414,20 @@ export function ProductTable({ role, categories }: { role: StaffRole; categories
                       <Link href={`/admin/products/${p.id}/edit`} className="text-gold">
                         Edit
                       </Link>
-                      {p.status !== "ARCHIVED" && (
-                        <button
-                          onClick={() => setConfirmTarget({ id: p.id, mode: "archive" })}
-                          className="text-ink/60 ml-auto"
-                        >
-                          Archive
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={p.status === "ACTIVE"}
+                        aria-label={`${p.status === "ACTIVE" ? "Deactivate" : "Activate"} ${p.name}`}
+                        disabled={isPending}
+                        onClick={() => handleAvailabilityChange(p.id, p.status !== "ACTIVE")}
+                        className="ml-auto inline-flex items-center gap-2"
+                      >
+                        <span className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${p.status === "ACTIVE" ? "bg-emerald-600" : "bg-gray-300"}`}>
+                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${p.status === "ACTIVE" ? "translate-x-4" : "translate-x-0.5"}`} />
+                        </span>
+                        {p.status === "ACTIVE" ? "On" : "Off"}
+                      </button>
                       <button
                         onClick={() => setConfirmTarget({ id: p.id, mode: "delete" })}
                         className={`text-red-500 ${p.status === "ARCHIVED" ? "ml-auto" : ""}`}

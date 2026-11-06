@@ -12,9 +12,16 @@ datasource db {
 // AUTH & RBAC
 // ============================================================
 
+enum CustomerRefundStatus {
+  NOT_REQUIRED
+  PENDING
+  COMPLETED
+}
+
 enum StaffRole {
-  SUPER_ADMIN     // full access, including financial data
-  SUPPORT_ADMIN   // operational access only — financials hidden
+  SUPER_ADMIN       // full access, including financial data and role assignment
+  TECHNICAL_SUPPORT // full Admin access; elevated role assigned only by Super Admin
+  SUPPORT_ADMIN     // operational access only — financials hidden
 }
 
 model User {
@@ -28,6 +35,8 @@ model User {
   accounts      Account[]
   sessions      Session[]
   activityLogs  ActivityLog[]
+  blogPosts     BlogPost[]
+  customerReturns CustomerReturn[]
   inventoryLogsPerformed        InventoryLog[]
   variantInventoryLogsPerformed VariantInventoryLog[]
   assignedEnquiries  Enquiry[]   @relation("EnquiryAssignee")
@@ -345,6 +354,13 @@ model VariantInventoryLog {
 // ORDERS
 // ============================================================
 
+enum CancellationReviewStatus {
+  NONE
+  REQUESTED
+  APPROVED
+  REJECTED
+}
+
 enum OrderStatus {
   PENDING
   PAID
@@ -363,9 +379,14 @@ model Order {
   customerId      String
   customer        Customer    @relation(fields: [customerId], references: [id])
   items           OrderItem[]
+  customerReturns CustomerReturn[]
   status          OrderStatus @default(PENDING)
+  stockUnavailable Boolean    @default(false)
+  cancellationReviewStatus CancellationReviewStatus @default(NONE)
+  cancellationRequestedAt DateTime?
+  cancellationRequestedBy String?
   shippingAddress Json
-  paymentReference String?
+  paymentReference String?     @unique
   trackingNumber  String?
 
   subtotal        Decimal     @db.Decimal(12, 2)
@@ -396,6 +417,29 @@ model OrderItem {
   variant   ProductVariant? @relation(fields: [variantId], references: [id])
   quantity  Int
   unitPrice Decimal @db.Decimal(12, 2)
+  customerReturns CustomerReturn[]
+}
+
+// Admin-recorded customer returns after delivery; stock restoration is limited to resale-eligible units.
+model CustomerReturn {
+  id             String    @id @default(cuid())
+  orderId         String
+  order           Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItemId     String
+  orderItem       OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  quantity        Int
+  restockQuantity Int       @default(0)
+  refundAmount    Decimal?  @db.Decimal(12, 2)
+  refundStatus    CustomerRefundStatus @default(NOT_REQUIRED)
+  businessDate    DateTime  @db.Date
+  note            String?   @db.Text
+  processedById   String
+  processedBy     User      @relation(fields: [processedById], references: [id], onDelete: Restrict)
+  createdAt       DateTime  @default(now())
+
+  @@index([orderId])
+  @@index([orderItemId])
+  @@index([businessDate])
 }
 
 model OrderNote {
@@ -547,7 +591,92 @@ model StoreSettings {
   /// stock — see lib/config/customer-care.ts. Null/absent until an admin
   /// sets it from Settings; no default number is ever hardcoded.
   customerCareWhatsApp String?
+  /// Controls whether the public storefront shows the Blog navigation link.
+  blogNavigationVisible Boolean @default(false)
+  /// Global safety switch: published posts remain noindex until intentionally enabled.
+  blogIndexingEnabled   Boolean @default(false)
   updatedAt            DateTime @updatedAt
+}
+
+// ============================================================
+// BLOG / EDITORIAL CMS
+// ============================================================
+
+enum BlogPostStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum BlogPostType {
+  GUIDE
+  CUSTOMER_STORY
+  FAQ
+  ANNOUNCEMENT
+}
+
+model BlogCategory {
+  id             String     @id @default(cuid())
+  name           String
+  slug           String     @unique
+  description    String?    @db.Text
+  seoTitle       String?
+  seoDescription String?
+  sortOrder      Int        @default(0)
+  isActive       Boolean    @default(true)
+  posts          BlogPost[]
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+model BlogPost {
+  id                 String          @id @default(cuid())
+  title              String
+  slug               String          @unique
+  excerpt            String          @db.Text
+  /// Markdown source. Rendered as text/Markdown by the storefront, never trusted HTML.
+  contentMarkdown    String          @db.Text
+  type               BlogPostType    @default(GUIDE)
+  status             BlogPostStatus  @default(DRAFT)
+  categoryId         String?
+  category           BlogCategory?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  tags               String[]        @default([])
+  coverImageUrl      String?
+  coverImagePublicId String?
+  coverImageAlt      String?
+  seoTitle           String?
+  seoDescription     String?
+  canonicalUrl       String?
+  isFeatured         Boolean         @default(false)
+  /// Per-article indexing permission; global StoreSettings switch must also be enabled.
+  isIndexable        Boolean         @default(false)
+  publishedAt        DateTime?
+  scheduledAt        DateTime?
+  authorId           String?
+  author             User?           @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  slugRedirects      BlogPostSlugRedirect[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([status, publishedAt])
+  @@index([categoryId, status])
+  @@index([type, status])
+  @@index([authorId])
+  @@index([isFeatured, status, publishedAt])
+}
+
+/// Preserves old article URLs when an editor changes a published slug.
+model BlogPostSlugRedirect {
+  id        String   @id @default(cuid())
+  fromSlug  String   @unique
+  postId    String
+  post      BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([postId])
 }
 
 

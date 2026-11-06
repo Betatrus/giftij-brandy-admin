@@ -16,6 +16,11 @@ const OPERATIONAL_ACTIONS = [
   "INVENTORY_DAMAGED",
   "INVENTORY_CUSTOMER_RETURN",
   "ORDER_STATUS_UPDATE",
+  "ORDER_STOCK_UNAVAILABLE_RESOLVED",
+  "ORDER_CANCELLATION_REVIEW_REQUESTED",
+  "ORDER_CANCELLATION_REVIEW_APPROVED",
+  "ORDER_CANCELLATION_REVIEW_REJECTED",
+  "CUSTOMER_REFUND_COMPLETED",
 ] as const;
 
 const operationalReportFiltersSchema = z
@@ -95,6 +100,21 @@ function actionLabel(
 
     case "INVENTORY_CUSTOMER_RETURN":
       return "Customer return recorded";
+
+    case "ORDER_STOCK_UNAVAILABLE_RESOLVED":
+      return "Paid order stock allocated";
+
+    case "CUSTOMER_REFUND_COMPLETED":
+      return "Customer refund marked completed";
+
+    case "ORDER_CANCELLATION_REVIEW_REQUESTED":
+      return "Cancellation review requested";
+
+    case "ORDER_CANCELLATION_REVIEW_APPROVED":
+      return "Cancellation review approved";
+
+    case "ORDER_CANCELLATION_REVIEW_REJECTED":
+      return "Cancellation review rejected";
 
     case "ORDER_STATUS_UPDATE": {
       const from = stringValue(metadata.from);
@@ -176,6 +196,21 @@ function activityDetails(
     }
 
     return parts.join(" · ") || "Inventory updated";
+  }
+
+  if (action === "ORDER_STOCK_UNAVAILABLE_RESOLVED") {
+    return "Full paid order quantity allocated; no refund initiated";
+  }
+
+  if (action === "CUSTOMER_REFUND_COMPLETED") {
+    return "Admin recorded refund completion";
+  }
+
+  if (action.startsWith("ORDER_CANCELLATION_REVIEW_")) {
+    const reason = stringValue(metadata.reason);
+    return reason
+      ? `Refund and inventory unchanged · Reason: ${reason}`
+      : "Refund and inventory unchanged";
   }
 
   if (action === "ORDER_STATUS_UPDATE") {

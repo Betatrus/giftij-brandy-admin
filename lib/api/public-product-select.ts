@@ -26,7 +26,12 @@ export const PUBLIC_PRODUCT_SUMMARY_SELECT = {
   variants: {
     select: {
       id: true,
+      sku: true,
+      value: true,
+      color: true,
+      size: true,
       currentStock: true,
+      status: true,
       image: { select: { url: true, altText: true } },
     },
   },
@@ -98,7 +103,12 @@ interface ProductSummaryRowShape {
   inventory: { currentStock: number } | null;
   variants: {
     id: string;
+    sku: string;
+    value: string;
+    color: string | null;
+    size: string | null;
     currentStock: number;
+    status: string;
     image: { url: string; altText: string | null } | null;
   }[];
 }
@@ -152,7 +162,9 @@ function toNumber(value: unknown): number {
 export function toProductSummaryDTO(row: ProductSummaryRowShape) {
   const cover = row.images.find((i) => i.imageType === "COVER") ?? row.images[0];
   const baseStock = row.inventory?.currentStock ?? 0;
-  const variantStock = row.variants.reduce((sum, v) => sum + v.currentStock, 0);
+  const activeVariants = row.variants.filter((variant) => variant.status !== "ARCHIVED");
+  const variantStock = activeVariants.reduce((sum, variant) => sum + variant.currentStock, 0);
+  const hasVariants = row.variants.length > 0;
 
   return {
     id: row.id,
@@ -174,23 +186,30 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
     currency: row.currency,
     coverImage: cover?.url ?? null,
     images: row.images.map((i) => i.url),
-    variants: row.variants.map((v) => ({
+    variants: activeVariants.map((v) => ({
       id: v.id,
+      sku: v.sku,
+      value: v.value,
+      color: v.color,
+      size: v.size,
       currentStock: v.currentStock,
+      inStock: v.currentStock > 0,
       image: v.image?.url ?? null,
     })),
     featuredFlags: row.featuredFlags,
-    inStock: baseStock > 0 || variantStock > 0,
-    hasVariants: row.variants.length > 0,
+    inStock: hasVariants ? variantStock > 0 : baseStock > 0,
+    hasVariants,
   };
 }
 
 export function toProductDetailDTO(row: ProductDetailRowShape) {
   const baseStock = row.inventory?.currentStock ?? 0;
-  const variantStockTotal = row.variants.reduce(
-    (sum, v) => sum + v.currentStock,
+  const activeVariants = row.variants.filter((variant) => variant.status !== "ARCHIVED");
+  const variantStockTotal = activeVariants.reduce(
+    (sum, variant) => sum + variant.currentStock,
     0
   );
+  const hasVariants = row.variants.length > 0;
 
   return {
     id: row.id,
@@ -225,8 +244,7 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     // product ("Colour", "Size", a custom admin-defined label, etc.) —
     // null when the product has no variants.
     variantType: row.variantType,
-    variants: row.variants
-      .filter((v) => v.status !== "ARCHIVED")
+    variants: activeVariants
       // sold-out variants stay visible; archived ones don't
       .map((v) => ({
         // `id` is the authoritative transactional identity — the
@@ -244,7 +262,7 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
         inStock: v.currentStock > 0,
         image: v.image?.url ?? null,
       })),
-    inStock: baseStock > 0 || variantStockTotal > 0,
+    inStock: hasVariants ? variantStockTotal > 0 : baseStock > 0,
     seoTitle: row.seoTitle,
     seoDescription: row.seoDescription,
   };

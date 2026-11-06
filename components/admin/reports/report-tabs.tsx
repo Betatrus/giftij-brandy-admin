@@ -6,6 +6,7 @@ import { CustomersReportView } from "./customers-report-view";
 import { InventoryReportView } from "./inventory-report-view";
 import { FinancialReportView } from "./financial-report-view";
 import { OperationalReportView } from "./operational-report-view";
+import { CustomerReturnsReportView } from "./customer-returns-report-view";
 
 type CategoryOption = {
   id: string;
@@ -18,6 +19,7 @@ type Tab =
   | "SALES"
   | "CUSTOMERS"
   | "INVENTORY"
+  | "RETURNS"
   | "FINANCIAL"
   | "OPERATIONAL";
 
@@ -37,6 +39,7 @@ export function ReportTabs({
     { key: "SALES", label: "Sales" },
     { key: "CUSTOMERS", label: "Customers" },
     { key: "INVENTORY", label: "Inventory" },
+    { key: "RETURNS", label: "Returns" },
 
     ...(canSeeFinancials
       ? [
@@ -82,6 +85,8 @@ export function ReportTabs({
       {tab === "INVENTORY" && (
         <InventoryReportView categories={categories} />
       )}
+
+      {tab === "RETURNS" && <CustomerReturnsReportView />}
 
       {tab === "FINANCIAL" &&
         canSeeFinancials && (

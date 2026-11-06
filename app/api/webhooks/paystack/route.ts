@@ -8,20 +8,34 @@ import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity-log";
 import {
   findOrCreateCustomerByEmail,
+  findOrCreateCustomerByEmailInTransaction,
   recordCustomerEvent,
 } from "@/lib/customers/identity";
 import {
-  deductStockForOrder,
+  allocateStockForPaidOrderAllOrNothing,
   type CartLine,
 } from "@/lib/orders/stock";
 import {
   consumeCheckoutReservation,
   releaseCheckoutReservationByReference,
 } from "@/lib/orders/stock-reservation";
-import { computeEffectivePrice } from "@/lib/pricing/effective-price";
 import { generateUniqueValueLike } from "@/lib/utils/slug";
 
 export const runtime = "nodejs";
+
+class PaymentVerificationMismatchError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaymentVerificationMismatchError";
+  }
+}
+
+class PaymentReviewRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaymentReviewRequiredError";
+  }
+}
 
 type PaystackWebhookEvent = {
   event: string;
@@ -40,11 +54,13 @@ type PaystackWebhookEvent = {
 
     metadata?: {
       reservationId?: string;
+      expectedAmountKobo?: number;
 
       cart?: {
         productId: string;
         variantId?: string;
         quantity: number;
+        unitPrice?: number;
       }[];
 
       shippingAddress?: Record<
@@ -101,33 +117,136 @@ function verifySignature(
   );
 }
 
-function parseCartFromMetadata(
+async function verifySuccessfulTransaction(
   data: PaystackWebhookEvent["data"],
-): CartLine[] {
-  const cart =
-    data.metadata?.cart;
+): Promise<void> {
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+
+  if (!secret) {
+    throw new Error("Paystack verification is not configured.");
+  }
+
+  // Verify the provider record first. Missing or malformed checkout metadata
+  // must not cause a verified successful payment to retry forever.
+  const response = await fetch(
+    `https://api.paystack.co/transaction/verify/${encodeURIComponent(data.reference)}`,
+    {
+      headers: { Authorization: `Bearer ${secret}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  const payload = (await response.json().catch(() => null)) as
+    | { status?: boolean; data?: { reference?: string; status?: string; amount?: number; currency?: string } }
+    | null;
+  const verified = payload?.data;
 
   if (
-    !Array.isArray(cart) ||
-    cart.length === 0
+    !response.ok || payload?.status !== true || verified?.status !== "success" ||
+    verified.reference !== data.reference ||
+    !Number.isSafeInteger(verified.amount) || verified.amount !== data.amount ||
+    verified.currency !== "NGN" || (data.currency ?? "NGN") !== "NGN"
   ) {
-    throw new Error(
-      "Webhook payload has no metadata.cart and order items cannot be reconstructed.",
+    throw new PaymentVerificationMismatchError(
+      "Paystack transaction verification did not match this checkout.",
     );
   }
 
-  return cart.map(
-    (line) => ({
-      productId:
-        line.productId,
+  const expectedAmount = data.metadata?.expectedAmountKobo;
+  if (
+    !Number.isSafeInteger(expectedAmount) ||
+    Number(expectedAmount) <= 0
+  ) {
+    throw new PaymentReviewRequiredError(
+      "Paystack verified the payment, but the server-calculated checkout amount is missing or invalid.",
+    );
+  }
 
-      variantId:
-        line.variantId ??
-        null,
+  if (verified.amount !== Number(expectedAmount)) {
+    throw new PaymentVerificationMismatchError(
+      "Verified Paystack amount does not match the server-calculated checkout amount.",
+    );
+  }
+}
 
-      quantity:
-        line.quantity,
-    }),
+type CheckoutPriceSnapshot = {
+  productId: string;
+  variantId: string | null;
+  quantity: number;
+  unitPrice: number;
+};
+
+function getValidatedPriceSnapshots(
+  data: PaystackWebhookEvent["data"],
+): CheckoutPriceSnapshot[] {
+  const cart = data.metadata?.cart;
+
+  if (!Array.isArray(cart) || cart.length === 0) {
+    throw new PaymentReviewRequiredError("Payment metadata has no checkout cart.");
+  }
+
+  const grouped = new Map<string, CheckoutPriceSnapshot>();
+
+  for (const line of cart) {
+    if (
+      !line || typeof line.productId !== "string" || !line.productId.trim() ||
+      !(line.variantId === undefined || line.variantId === null || (typeof line.variantId === "string" && line.variantId.trim())) ||
+      !Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
+      typeof line.unitPrice !== "number" || !Number.isFinite(line.unitPrice) || line.unitPrice < 0 ||
+      !Number.isSafeInteger(Math.round(line.unitPrice * 100)) ||
+      Math.abs(line.unitPrice * 100 - Math.round(line.unitPrice * 100)) > 1e-7
+    ) {
+      throw new PaymentReviewRequiredError("Payment metadata contains an invalid cart or price snapshot.");
+    }
+
+    const variantId = line.variantId ?? null;
+    const key = `${line.productId}:${variantId ?? ""}`;
+    const existing = grouped.get(key);
+
+    if (existing) {
+      // Duplicate product/variant rows are safe to combine only when they
+      // carry the same immutable unit-price snapshot.
+      if (existing.unitPrice !== line.unitPrice) {
+        throw new PaymentReviewRequiredError("Duplicate cart lines contain conflicting price snapshots.");
+      }
+      const combinedQuantity = existing.quantity + line.quantity;
+      if (!Number.isSafeInteger(combinedQuantity)) {
+        throw new PaymentReviewRequiredError("Payment metadata contains an invalid cart quantity.");
+      }
+      existing.quantity = combinedQuantity;
+    } else {
+      grouped.set(key, {
+        productId: line.productId,
+        variantId,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+      });
+    }
+  }
+
+  return Array.from(grouped.values());
+}
+
+function normalizeCartForComparison(
+  lines: Array<{ productId: string; variantId?: string | null; quantity: number }>,
+): CartLine[] {
+  const grouped = new Map<string, CartLine>();
+  for (const line of lines) {
+    if (
+      typeof line.productId !== "string" || !line.productId ||
+      !(line.variantId === undefined || line.variantId === null || typeof line.variantId === "string") ||
+      !Number.isSafeInteger(line.quantity) || line.quantity <= 0
+    ) {
+      throw new PaymentReviewRequiredError("Checkout reservation contains an invalid cart line.");
+    }
+    const variantId = line.variantId ?? null;
+    const key = `${line.productId}:${variantId ?? ""}`;
+    const current = grouped.get(key);
+    if (current) current.quantity += line.quantity;
+    else grouped.set(key, { productId: line.productId, variantId, quantity: line.quantity });
+  }
+  return Array.from(grouped.values()).sort((a, b) =>
+    `${a.productId}:${a.variantId ?? ""}`.localeCompare(`${b.productId}:${b.variantId ?? ""}`),
   );
 }
 
@@ -318,28 +437,68 @@ export async function POST(
       err,
     );
 
+    // A Paystack-verified charge with invalid checkout metadata is persisted
+    // as a minimal review case. No customer details, amounts, or raw payloads
+    // are copied into the admin review queue.
+    if (err instanceof PaymentReviewRequiredError) {
+      const resource = `PaystackReference:${event.data.reference}`;
+
+      // Serialize review creation per reference across serverless instances.
+      // The lock + existence check + insert share one transaction, so
+      // concurrent Paystack redeliveries cannot create duplicate review rows.
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))`;
+        const existingReview = await tx.activityLog.findFirst({
+          where: {
+            action: "PAYMENT_REVIEW_REQUIRED",
+            resource,
+          },
+          select: { id: true },
+        });
+
+        if (!existingReview) {
+          await tx.activityLog.create({
+            data: {
+              systemSource: "paystack_webhook",
+              action: "PAYMENT_REVIEW_REQUIRED",
+              resource,
+              metadata: {
+                reference: event.data.reference,
+                reason: err.message,
+                verificationState: "PAYSTACK_VERIFIED",
+              },
+            },
+          });
+        }
+      });
+      return NextResponse.json({ received: true, reviewRequired: true }, { status: 200 });
+    }
+
+    if (err instanceof PaymentVerificationMismatchError) {
+      await logActivity({
+        systemSource: "paystack_webhook",
+        action: "PAYMENT_VERIFICATION_REJECTED",
+        resource: `PaystackReference:${event.data.reference}`,
+        metadata: {
+          reference: event.data.reference,
+          verificationState: "NOT_VERIFIED",
+        },
+      });
+      return NextResponse.json({ received: true, ignored: true }, { status: 200 });
+    }
+
     await logActivity({
-      systemSource:
-        "paystack_webhook",
-
-      action:
-        "WEBHOOK_PROCESSING_ERROR",
-
-      resource:
-        `PaystackEvent:${event.event}`,
-
+      systemSource: "paystack_webhook",
+      action: "WEBHOOK_PROCESSING_ERROR",
+      resource: `PaystackEvent:${event.event}`,
       metadata: {
-        error:
-          err instanceof
-          Error
-            ? err.message
-            : String(err),
-
-        reference:
-          event.data
-            ?.reference,
+        error: err instanceof Error ? err.message : String(err),
+        reference: event.data?.reference,
       },
     });
+
+    // Transient Paystack/network/database failures remain retryable.
+    return NextResponse.json({ received: false }, { status: 500 });
   }
 
   return NextResponse.json(
@@ -355,6 +514,9 @@ export async function POST(
 async function handleChargeSuccess(
   data: PaystackWebhookEvent["data"],
 ) {
+  // Verify directly with Paystack before making customer, order, or stock writes.
+  await verifySuccessfulTransaction(data);
+
   /**
    * Paystack may retry the same webhook.
    *
@@ -382,9 +544,26 @@ async function handleChargeSuccess(
       .toLowerCase();
 
   if (!email) {
-    throw new Error(
-      "charge.success webhook has no customer email and identity cannot be resolved.",
+    throw new PaymentReviewRequiredError(
+      "Verified payment has no customer email; customer identity cannot be safely resolved.",
     );
+  }
+
+  // Reject malformed or incomplete payment metadata before any customer,
+  // order, or inventory writes. A verified charge with an invalid cart must
+  // not create a partial customer record as a side effect.
+  const priceSnapshots = getValidatedPriceSnapshots(data);
+  const snapshotSubtotal = priceSnapshots.reduce(
+    (sum, line) => sum + line.unitPrice * line.quantity,
+    0,
+  );
+  const snapshotAmountKobo = Math.round(snapshotSubtotal * 100);
+  if (
+    !Number.isSafeInteger(snapshotAmountKobo) ||
+    snapshotAmountKobo !== data.amount ||
+    snapshotAmountKobo !== data.metadata?.expectedAmountKobo
+  ) {
+    throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
   }
 
   const {
@@ -397,28 +576,13 @@ async function handleChargeSuccess(
       data,
     );
 
-  const customer =
-    await findOrCreateCustomerByEmail(
-      {
-        email,
-        name,
-        phone,
-
-        address:
-          shippingAddress
-            ? (shippingAddress as Prisma.InputJsonValue)
-            : undefined,
-
-        country:
-          country ??
-          undefined,
-      },
-    );
-
-  const cartLines =
-    parseCartFromMetadata(
-      data,
-    );
+  // Customer creation/profile updates are deferred until all reservation,
+  // cart and price checks pass, then committed atomically with the order.
+  // For a reservation-backed checkout, the database reservation—not
+  // mutable webhook metadata—is authoritative for products, variants and quantities.
+  const metadataCartLines: CartLine[] = priceSnapshots.map(({ productId, variantId, quantity }) => ({
+    productId, variantId, quantity,
+  }));
 
   const products =
     await prisma.product.findMany(
@@ -426,7 +590,7 @@ async function handleChargeSuccess(
         where: {
           id: {
             in:
-              cartLines.map(
+              metadataCartLines.map(
                 (line) =>
                   line.productId,
               ),
@@ -455,54 +619,19 @@ async function handleChargeSuccess(
   let subtotal = 0;
   let costBasis = 0;
 
-  const effectiveUnitPriceByLine =
-    new Map<
-      string,
-      number
-    >();
+  const effectiveUnitPriceByLine = new Map<string, number>();
 
-  for (
-    const line of
-    cartLines
-  ) {
-    const product =
-      productById.get(
-        line.productId,
-      );
-
+  // Prices must come from the server-calculated checkout snapshots. Falling
+  // back to today's product price could silently change a paid order's value.
+  for (const snapshot of priceSnapshots) {
+    const product = productById.get(snapshot.productId);
     if (!product) {
-      throw new Error(
-        `Cart references unknown product ${line.productId}`,
-      );
+      throw new PaymentReviewRequiredError(`Cart references unknown product ${snapshot.productId}`);
     }
-
-    const effectiveUnitPrice =
-      computeEffectivePrice(
-        Number(
-          product.price,
-        ),
-
-        product.discount
-          ? Number(
-              product.discount,
-            )
-          : 0,
-      );
-
     effectiveUnitPriceByLine.set(
-      `${line.productId}:${line.variantId ?? ""}`,
-      effectiveUnitPrice,
+      `${snapshot.productId}:${snapshot.variantId ?? ""}`,
+      snapshot.unitPrice,
     );
-
-    subtotal +=
-      effectiveUnitPrice *
-      line.quantity;
-
-    costBasis +=
-      Number(
-        product.costPrice,
-      ) *
-      line.quantity;
   }
 
   const orderNumber =
@@ -511,6 +640,16 @@ async function handleChargeSuccess(
   const order =
     await prisma.$transaction(
       async (tx) => {
+        // Serialize a payment reference across all serverless instances.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))`;
+
+        const duplicate = await tx.order.findFirst({
+          where: { paymentReference: data.reference },
+        });
+        if (duplicate) {
+          return { order: duplicate, usedReservation: false, alreadyProcessed: true };
+        }
+
         /**
          * NEW RESERVATION PATH
          *
@@ -529,6 +668,65 @@ async function handleChargeSuccess(
             data.reference,
           );
 
+        const hasReservation = reservationResult.cart.length > 0;
+        const cartLines = hasReservation
+          ? normalizeCartForComparison(reservationResult.cart)
+          : normalizeCartForComparison(metadataCartLines);
+
+        if (hasReservation) {
+          if (data.metadata?.reservationId !== reservationResult.reservationId) {
+            throw new PaymentReviewRequiredError("Payment reservation ID does not match the attached checkout reservation.");
+          }
+          const reservedCart = normalizeCartForComparison(reservationResult.cart);
+          const metadataCart = normalizeCartForComparison(metadataCartLines);
+          if (
+            reservedCart.length !== metadataCart.length ||
+            reservedCart.some((line, index) =>
+              line.productId !== metadataCart[index]?.productId ||
+              (line.variantId ?? null) !== (metadataCart[index]?.variantId ?? null) ||
+              line.quantity !== metadataCart[index]?.quantity
+            )
+          ) {
+            throw new PaymentReviewRequiredError("Payment cart does not match the reserved checkout cart.");
+          }
+        }
+
+        for (const line of cartLines) {
+          const key = `${line.productId}:${line.variantId ?? ""}`;
+          if (!effectiveUnitPriceByLine.has(key)) {
+            throw new PaymentReviewRequiredError("A reserved cart line has no matching checkout price snapshot.");
+          }
+          const snapshot = priceSnapshots.find((item) =>
+            item.productId === line.productId && item.variantId === (line.variantId ?? null)
+          );
+          if (!snapshot) {
+            throw new PaymentReviewRequiredError("A reserved cart line has no matching checkout price snapshot.");
+          }
+          subtotal += snapshot.unitPrice * line.quantity;
+          const product = productById.get(line.productId);
+          if (!product) throw new PaymentReviewRequiredError(`Cart references unknown product ${line.productId}`);
+          costBasis += Number(product.costPrice) * line.quantity;
+        }
+
+        if (!Number.isSafeInteger(Math.round(subtotal * 100)) ||
+            Math.round(subtotal * 100) !== data.amount ||
+            Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo)) {
+          throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
+        }
+
+        const customer = await findOrCreateCustomerByEmailInTransaction(
+          tx,
+          {
+            email,
+            name,
+            phone,
+            address: shippingAddress
+              ? (shippingAddress as Prisma.InputJsonValue)
+              : undefined,
+            country: country ?? undefined,
+          },
+        );
+
         /**
          * Compatibility / safety fallback.
          *
@@ -541,27 +739,15 @@ async function handleChargeSuccess(
          * In those cases we preserve the successful paid order and fall back
          * to the old atomic deduction logic.
          */
-        let fallbackShortfalls:
-          {
-            productId: string;
-            variantId?:
-              | string
-              | null;
-            requested: number;
-            deducted: number;
-          }[] = [];
+        let stockUnavailable = false;
 
-        if (
-          !reservationResult.consumed
-        ) {
-          const fallback =
-            await deductStockForOrder(
+        if (!reservationResult.consumed) {
+          stockUnavailable = !(
+            await allocateStockForPaidOrderAllOrNothing(
               tx,
               cartLines,
-            );
-
-          fallbackShortfalls =
-            fallback.shortfalls;
+            )
+          );
         }
 
         const created =
@@ -573,8 +759,8 @@ async function handleChargeSuccess(
                 customerId:
                   customer.id,
 
-                status:
-                  "PENDING",
+                status: "PENDING",
+                stockUnavailable,
 
                 shippingAddress:
                   (data.metadata
@@ -624,62 +810,33 @@ async function handleChargeSuccess(
             },
           );
 
-        if (
-          fallbackShortfalls.length >
-          0
-        ) {
-          await tx.orderNote.create(
-            {
-              data: {
-                orderId:
-                  created.id,
-
-                note:
-                  `Stock shortfall at fulfillment: ${fallbackShortfalls
-                    .map(
-                      (
-                        shortfall,
-                      ) =>
-                        `${shortfall.productId}${
-                          shortfall.variantId
-                            ? `/${shortfall.variantId}`
-                            : ""
-                        } requested ${shortfall.requested}, only ${shortfall.deducted} available`,
-                    )
-                    .join(
-                      "; ",
-                    )}`,
-
-                createdBy:
-                  "system:paystack_webhook",
-              },
+        if (stockUnavailable) {
+          await tx.orderNote.create({
+            data: {
+              orderId: created.id,
+              note:
+                "PAID - STOCK UNAVAILABLE: Paystack confirmed payment after the checkout reservation was no longer active. No stock was deducted. Admin resolution/refund review is required.",
+              createdBy: "system:paystack_webhook",
             },
-          );
+          });
         }
 
-        return {
-          order:
-            created,
+        await tx.customer.update({
+          where: { id: customer.id },
+          data: { lastPurchase: new Date() },
+        });
 
-          usedReservation:
-            reservationResult.consumed,
+        return {
+          order: created,
+          usedReservation: reservationResult.consumed,
+          alreadyProcessed: false,
         };
       },
     );
 
-  await prisma.customer.update(
-    {
-      where: {
-        id:
-          customer.id,
-      },
-
-      data: {
-        lastPurchase:
-          new Date(),
-      },
-    },
-  );
+  if (order.alreadyProcessed) {
+    return;
+  }
 
   await logActivity({
     systemSource:

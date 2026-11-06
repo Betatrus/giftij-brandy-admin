@@ -35,6 +35,9 @@ export async function listStaff() {
 export async function createStaff(input: CreateStaffInput) {
   const session = await requireStaffManager();
   const parsed = createStaffSchema.parse(input);
+  if (parsed.role !== "SUPPORT_ADMIN" && session.user.role !== "SUPER_ADMIN") {
+    throw new Error("FORBIDDEN: only a Super Admin can assign elevated staff roles");
+  }
 
   const existing = await prisma.user.findUnique({ where: { email: parsed.email } });
   if (existing) {
@@ -59,8 +62,12 @@ export async function createStaff(input: CreateStaffInput) {
   return user;
 }
 
-export async function updateStaffRole(userId: string, role: "SUPER_ADMIN" | "SUPPORT_ADMIN") {
+export async function updateStaffRole(userId: string, role: "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN") {
   const session = await requireStaffManager();
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+  if (session.user.role !== "SUPER_ADMIN" && (role !== "SUPPORT_ADMIN" || target.role === "TECHNICAL_SUPPORT" || target.role === "SUPER_ADMIN")) {
+    throw new Error("FORBIDDEN: only a Super Admin can assign or revoke elevated staff roles");
+  }
 
   if (userId === session.user.id && role !== "SUPER_ADMIN") {
     throw new Error("You cannot remove your own Super Admin access.");
@@ -80,9 +87,17 @@ export async function updateStaffRole(userId: string, role: "SUPER_ADMIN" | "SUP
 
 export async function toggleStaffActive(userId: string, isActive: boolean) {
   const session = await requireStaffManager();
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true, isActive: true } });
 
+  if (session.user.role !== "SUPER_ADMIN" && target.role !== "SUPPORT_ADMIN") {
+    throw new Error("FORBIDDEN: Technical Support can only manage Support Admin accounts.");
+  }
   if (userId === session.user.id && !isActive) {
     throw new Error("You cannot revoke your own access.");
+  }
+  if (!isActive && target.isActive && target.role === "SUPER_ADMIN") {
+    const activeSuperAdmins = await prisma.user.count({ where: { role: "SUPER_ADMIN", isActive: true } });
+    if (activeSuperAdmins <= 1) throw new Error("Cannot revoke the only active Super Admin account.");
   }
 
   await prisma.user.update({ where: { id: userId }, data: { isActive } });
@@ -115,10 +130,13 @@ export async function deleteStaff(userId: string) {
   }
 
   const target = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  if (target.role === "SUPER_ADMIN") {
-    const superAdminCount = await prisma.user.count({ where: { role: "SUPER_ADMIN" } });
-    if (superAdminCount <= 1) {
-      throw new Error("Cannot delete the only remaining Super Admin account.");
+  if (session.user.role !== "SUPER_ADMIN" && target.role !== "SUPPORT_ADMIN") {
+    throw new Error("FORBIDDEN: Technical Support can only manage Support Admin accounts.");
+  }
+  if (target.role === "SUPER_ADMIN" && target.isActive) {
+    const activeSuperAdmins = await prisma.user.count({ where: { role: "SUPER_ADMIN", isActive: true } });
+    if (activeSuperAdmins <= 1) {
+      throw new Error("Cannot delete the only active Super Admin account.");
     }
   }
 
@@ -151,6 +169,10 @@ export async function deleteStaff(userId: string) {
 export async function resetStaffPassword(userId: string, input: ResetPasswordInput) {
   const session = await requireStaffManager();
   const parsed = resetPasswordSchema.parse(input);
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+  if (session.user.role !== "SUPER_ADMIN" && target.role !== "SUPPORT_ADMIN") {
+    throw new Error("FORBIDDEN: Technical Support can only manage Support Admin accounts.");
+  }
 
   const passwordHash = await bcrypt.hash(parsed.newPassword, 12);
   await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
@@ -195,7 +217,11 @@ export async function changeOwnPassword(input: ChangeOwnPasswordInput) {
 }
 
 export async function getStaffActivity(userId: string) {
-  await requireStaffManager();
+  const session = await requireStaffManager();
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+  if (session.user.role !== "SUPER_ADMIN" && target.role !== "SUPPORT_ADMIN") {
+    throw new Error("FORBIDDEN: Technical Support can only inspect Support Admin activity.");
+  }
   return prisma.activityLog.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },

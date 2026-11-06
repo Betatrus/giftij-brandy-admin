@@ -2,8 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { hasPermission } from "@/lib/permissions";
-import { logActivity } from "@/lib/activity-log";
+import { canViewFinancials, hasPermission } from "@/lib/permissions";
 
 import {
   adjustStockSchema,
@@ -12,6 +11,8 @@ import {
   type AdjustStockInput,
   type AdjustVariantStockInput,
   type AdjustmentReasonType,
+  recordCustomerReturnSchema,
+  type RecordCustomerReturnInput,
 } from "@/lib/validators/inventory";
 
 import {
@@ -57,8 +58,17 @@ async function requireSession() {
   return session;
 }
 
+async function requireInventoryRead() {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:read")) {
+    throw new Error("FORBIDDEN: you do not have permission to view inventory");
+  }
+  return session;
+}
+
 type StockRecord = {
   currentStock: number;
+  reservedStock: number;
   soldStock: number;
   damagedStock: number;
   returnedStock: number;
@@ -66,20 +76,26 @@ type StockRecord = {
 
 function assertEnoughStock(
   currentStock: number,
+  reservedStock: number,
   changeType:
     | AdjustStockInput["changeType"]
     | AdjustVariantStockInput["changeType"],
   quantity: number,
 ) {
+  const availableToAdjust = currentStock;
+
   if (
-    (changeType === "DECREASE" ||
-      changeType === "DAMAGE") &&
-    quantity > currentStock
+    (changeType === "DECREASE" || changeType === "DAMAGE") &&
+    quantity > availableToAdjust
   ) {
     throw new Error(
-      `Only ${currentStock} unit${
-        currentStock === 1 ? "" : "s"
-      } are currently in stock.`,
+      `Only ${availableToAdjust} unreserved unit${availableToAdjust === 1 ? "" : "s"} are available to adjust. ${reservedStock} unit${reservedStock === 1 ? " is" : "s are"} reserved for active checkouts.`,
+    );
+  }
+
+  if (changeType === "ADJUST" && quantity < reservedStock) {
+    throw new Error(
+      `The new stock level cannot be below the ${reservedStock} units already reserved for checkout.`,
     );
   }
 }
@@ -121,8 +137,9 @@ function computeStockDelta(
       break;
 
     case "ADJUST":
+      // Admin enters total physical stock; active reservations remain reserved.
       data.currentStock =
-        quantity;
+        quantity - current.reservedStock;
       break;
 
     case "DAMAGE":
@@ -208,82 +225,268 @@ function revalidateInventory() {
   revalidateTag("products");
 }
 
+
+export async function recordCustomerReturn(input: RecordCustomerReturnInput) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to record customer returns");
+  const parsed = recordCustomerReturnSchema.parse(input);
+  const canRecordRefundAmount = canViewFinancials(session.user.role);
+  if (!canRecordRefundAmount && parsed.refundAmount !== undefined) {
+    throw new Error("FORBIDDEN: refund amounts are restricted to Super Admin.");
+  }
+  const businessDate = new Date(parsed.businessDate + "T00:00:00.000Z");
+  if (Number.isNaN(businessDate.getTime()) || businessDate.toISOString().slice(0, 10) !== parsed.businessDate || parsed.businessDate > new Date().toISOString().slice(0, 10)) {
+    throw new Error("Return date must be valid and cannot be in the future.");
+  }
+
+  const returnId = await prisma.$transaction(async (tx) => {
+    const lockedItems = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "OrderItem" WHERE "id" = ${parsed.orderItemId} FOR UPDATE
+    `;
+    if (!lockedItems.length) throw new Error("Order item not found.");
+    const item = await tx.orderItem.findUniqueOrThrow({
+      where: { id: parsed.orderItemId },
+      include: {
+        order: { select: { id: true, orderNumber: true, customerId: true, status: true } },
+        product: { select: { id: true, name: true, sku: true } },
+        variant: { select: { id: true, value: true, sku: true } },
+      },
+    });
+    if (!["DELIVERED", "RETURNED"].includes(item.order.status)) {
+      throw new Error("Only items from delivered orders can be returned.");
+    }
+    const previous = await tx.customerReturn.aggregate({
+      where: { orderItemId: item.id }, _sum: { quantity: true },
+    });
+    const remaining = item.quantity - (previous._sum.quantity ?? 0);
+    if (parsed.quantity > remaining) throw new Error(`Only ${remaining} unit(s) remain eligible for return on this order item.`);
+
+    if (parsed.restockQuantity > 0) {
+      if (item.variantId) {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "ProductVariant" WHERE "id" = ${item.variantId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error("The purchased variant no longer exists.");
+        await tx.productVariant.update({
+          where: { id: item.variantId },
+          data: { currentStock: { increment: parsed.restockQuantity }, returnedStock: { increment: parsed.restockQuantity } },
+        });
+        await tx.variantInventoryLog.create({
+          data: { variantId: item.variantId, changeType: "RETURN", quantity: parsed.restockQuantity,
+            reason: `[CUSTOMER_RETURN][DATE:${parsed.businessDate}] Order ${item.order.orderNumber}; returned ${parsed.quantity}; restocked ${parsed.restockQuantity}${parsed.note ? `; ${parsed.note}` : ""}`,
+            performedById: session.user.id },
+        });
+      } else {
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "Inventory" WHERE "productId" = ${item.productId} FOR UPDATE
+        `;
+        if (!locked.length) throw new Error("Inventory record not found for the returned product.");
+        await tx.inventory.update({
+          where: { id: locked[0].id },
+          data: { currentStock: { increment: parsed.restockQuantity }, returnedStock: { increment: parsed.restockQuantity } },
+        });
+        await tx.inventoryLog.create({
+          data: { inventoryId: locked[0].id, changeType: "RETURN", quantity: parsed.restockQuantity,
+            reason: `[CUSTOMER_RETURN][DATE:${parsed.businessDate}] Order ${item.order.orderNumber}; returned ${parsed.quantity}; restocked ${parsed.restockQuantity}${parsed.note ? `; ${parsed.note}` : ""}`,
+            performedById: session.user.id },
+        });
+      }
+    }
+    const record = await tx.customerReturn.create({
+      data: { orderId: item.orderId, orderItemId: item.id, quantity: parsed.quantity,
+        restockQuantity: parsed.restockQuantity, refundAmount: parsed.refundAmount,
+        refundStatus: parsed.refundStatus,
+        businessDate, note: parsed.note?.trim() || null, processedById: session.user.id },
+    });
+    await tx.customerEvent.create({
+      data: { customerId: item.order.customerId, label: "Customer return recorded",
+        metadata: { orderNumber: item.order.orderNumber, productName: item.product.name,
+          variant: item.variant?.value ?? null, quantity: parsed.quantity,
+          restockQuantity: parsed.restockQuantity, refundStatus: parsed.refundStatus } },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "INVENTORY_CUSTOMER_RETURN",
+        resource: `CustomerReturn:${record.id}`,
+        metadata: {
+          orderNumber: item.order.orderNumber,
+          orderItemId: item.id,
+          productName: item.product.name,
+          variant: item.variant?.value ?? null,
+          quantityReturned: parsed.quantity,
+          quantityRestocked: parsed.restockQuantity,
+          refundStatus: parsed.refundStatus,
+          ...(canRecordRefundAmount ? { refundAmount: parsed.refundAmount ?? null } : {}),
+          businessDate: parsed.businessDate,
+          note: parsed.note ?? null,
+        },
+      },
+    });
+    return record.id;
+  });
+
+
+  revalidateInventory();
+  revalidatePath("/admin/reports");
+  revalidatePath("/admin/customers");
+  return { success: true, returnId };
+}
+
+
+export async function listPendingCustomerRefunds() {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to manage customer refunds");
+  }
+  const records = await prisma.customerReturn.findMany({
+    where: { refundStatus: "PENDING" },
+    orderBy: [{ businessDate: "asc" }, { createdAt: "asc" }],
+    take: 200,
+    select: {
+      id: true, quantity: true, restockQuantity: true, businessDate: true, note: true,
+      order: { select: { orderNumber: true, customer: { select: { name: true } } } },
+      orderItem: { select: { product: { select: { name: true } }, variant: { select: { value: true } } } },
+    },
+  });
+  return records.map((record) => ({
+    id: record.id,
+    orderNumber: record.order.orderNumber,
+    customerName: record.order.customer.name,
+    productName: record.orderItem.product.name,
+    variant: record.orderItem.variant?.value ?? null,
+    quantity: record.quantity,
+    businessDate: record.businessDate.toISOString().slice(0, 10),
+    note: record.note,
+  }));
+}
+
+export async function completeCustomerRefund(returnId: string) {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to complete customer refunds");
+  }
+  if (typeof returnId !== "string" || returnId.trim().length === 0) throw new Error("A valid return record is required.");
+  const id = returnId.trim();
+  const result = await prisma.$transaction(async (tx) => {
+    const updated = await tx.customerReturn.updateMany({
+      where: { id, refundStatus: "PENDING" },
+      data: { refundStatus: "COMPLETED" },
+    });
+    if (updated.count !== 1) {
+      throw new Error("This refund is no longer pending. Refresh the list and check its current status.");
+    }
+    const record = await tx.customerReturn.findUniqueOrThrow({
+      where: { id },
+      include: {
+        order: { select: { orderNumber: true } },
+        orderItem: { select: { product: { select: { name: true } } } },
+      },
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: "CUSTOMER_REFUND_COMPLETED",
+        resource: `CustomerReturn:${record.id}`,
+        metadata: {
+          orderNumber: record.order.orderNumber,
+          productName: record.orderItem.product.name,
+          quantityReturned: record.quantity,
+          refundStatus: "COMPLETED",
+          completedBy: session.user.name ?? session.user.email ?? "Admin",
+        },
+      },
+    });
+    return record;
+  });
+  revalidatePath("/admin/inventory");
+  revalidatePath("/admin/reports");
+  revalidatePath("/admin/analytics");
+  revalidatePath("/admin/customers");
+  return { success: true };
+}
+
+export async function listReturnableOrderItems() {
+  const session = await requireSession();
+  if (!hasPermission(session.user.role, "inventory:write")) throw new Error("FORBIDDEN: you do not have permission to manage customer returns");
+  const items = await prisma.orderItem.findMany({
+    where: { order: { status: { in: ["DELIVERED", "RETURNED"] } } },
+    orderBy: { order: { createdAt: "desc" } },
+    take: 300,
+    select: {
+      id: true, quantity: true, variant: { select: { value: true } },
+      product: { select: { name: true, sku: true } },
+      order: { select: { id: true, orderNumber: true, status: true, createdAt: true, customer: { select: { name: true, email: true } } } },
+      customerReturns: { select: { quantity: true } },
+    },
+  });
+  return items.map((item) => ({
+    canRecordRefundAmount: canViewFinancials(session.user.role),
+    orderItemId: item.id,
+    orderNumber: item.order.orderNumber,
+    orderDate: item.order.createdAt,
+    customerName: item.order.customer.name,
+    customerEmail: item.order.customer.email,
+    productName: item.product.name,
+    sku: item.product.sku,
+    variant: item.variant?.value ?? null,
+    orderedQuantity: item.quantity,
+    returnedQuantity: item.customerReturns.reduce((sum, r) => sum + r.quantity, 0),
+    remainingQuantity: item.quantity - item.customerReturns.reduce((sum, r) => sum + r.quantity, 0),
+  })).filter((item) => item.remainingQuantity > 0);
+}
+
 export async function adjustStock(
   input: AdjustStockInput,
 ) {
-  const session =
-    await requireSession();
+  const session = await requireSession();
 
-  if (
-    !hasPermission(
-      session.user.role,
-      "inventory:write",
-    )
-  ) {
-    throw new Error(
-      "FORBIDDEN: you do not have permission to adjust inventory",
-    );
+  if (!hasPermission(session.user.role, "inventory:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to adjust inventory");
   }
 
-  const parsed =
-    adjustStockSchema.parse(
-      input,
-    );
+  const parsed = adjustStockSchema.parse(input);
 
-  const inventory =
-    await prisma.inventory.findUniqueOrThrow(
-      {
-        where: {
-          productId:
-            parsed.productId,
-        },
+  // Lock the inventory row before reading stock. Checkout reservations update
+  // this same row, so they serialize with manual adjustments instead of being
+  // overwritten by a stale read.
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "Inventory" WHERE "productId" = ${parsed.productId} FOR UPDATE
+    `;
+    if (locked.length === 0) {
+      throw new Error("Inventory record not found");
+    }
 
-        include: {
-          product: {
-            select: {
-              id: true,
-              name: true,
-              sku: true,
-              price: true,
-            },
-          },
+    const inventory = await tx.inventory.findUniqueOrThrow({
+      where: { id: locked[0].id },
+      include: {
+        product: {
+          select: { id: true, name: true, sku: true, price: true },
         },
       },
+    });
+
+    assertEnoughStock(
+      inventory.currentStock,
+      inventory.reservedStock,
+      parsed.changeType,
+      parsed.quantity,
     );
 
-  assertEnoughStock(
-    inventory.currentStock,
-    parsed.changeType,
-    parsed.quantity,
-  );
-
-  const beforeStock =
-    inventory.currentStock;
-
-  const data =
-    computeStockDelta(
+    const beforeStock = inventory.currentStock;
+    const data = computeStockDelta(
       inventory,
       parsed.changeType,
       parsed.quantity,
       parsed.adjustmentReason,
     );
-
-  const afterStock =
-    calculateAfterStock(
-      beforeStock,
-      data,
-    );
-
-  const originalPrice =
-    parsed.adjustmentReason ===
-    "OFFLINE_SALE"
-      ? Number(
-          inventory.product.price,
-        )
-      : undefined;
-
-  const reason =
-    formatAdjustmentReason(
+    const afterStock = calculateAfterStock(beforeStock, data);
+    const originalPrice =
+      parsed.adjustmentReason === "OFFLINE_SALE"
+        ? Number(inventory.product.price)
+        : undefined;
+    const reason = formatAdjustmentReason(
       parsed.adjustmentReason,
       parsed.reason,
       parsed.unitSellingPrice,
@@ -291,91 +494,43 @@ export async function adjustStock(
       parsed.businessDate,
     );
 
-  await prisma.$transaction([
-    prisma.inventory.update({
-      where: {
-        id: inventory.id,
-      },
+    await tx.inventory.update({
+      where: { id: inventory.id },
       data,
-    }),
-
-    prisma.inventoryLog.create({
+    });
+    await tx.inventoryLog.create({
       data: {
-        inventoryId:
-          inventory.id,
-
-        changeType:
-          parsed.changeType,
-
-        quantity:
-          parsed.quantity,
-
+        inventoryId: inventory.id,
+        changeType: parsed.changeType,
+        quantity: parsed.quantity,
         reason,
-
-        performedById:
-          session.user.id,
+        performedById: session.user.id,
       },
-    }),
-  ]);
-
-  await logActivity({
-    userId: session.user.id,
-
-    action: activityAction(
-      parsed.adjustmentReason,
-    ),
-
-    resource:
-      `Inventory:${inventory.id}`,
-
-    metadata: {
-      productId:
-        inventory.product.id,
-
-      productName:
-        inventory.product.name,
-
-      productSku:
-        inventory.product.sku,
-
-      targetKind: "base",
-
-      changeType:
-        parsed.changeType,
-
-      adjustmentReason:
-        parsed.adjustmentReason,
-
-      businessDate:
-        parsed.businessDate,
-
-      requestedQuantity:
-        parsed.quantity,
-
-      quantityChanged:
-        actualQuantityChanged(
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: activityAction(parsed.adjustmentReason),
+        resource: `Inventory:${inventory.id}`,
+        metadata: {
+          productId: inventory.product.id,
+          productName: inventory.product.name,
+          productSku: inventory.product.sku,
+          targetKind: "base",
+          changeType: parsed.changeType,
+          adjustmentReason: parsed.adjustmentReason,
+          businessDate: parsed.businessDate,
+          requestedQuantity: parsed.quantity,
+          quantityChanged: actualQuantityChanged(beforeStock, afterStock),
           beforeStock,
           afterStock,
-        ),
-
-      beforeStock,
-      afterStock,
-
-      note:
-        parsed.reason ?? null,
-
-      unitSellingPrice:
-        parsed.unitSellingPrice ??
-        null,
-
-      originalPrice:
-        originalPrice ?? null,
-
-      performedByName:
-        session.user.name ??
-        session.user.email ??
-        "Admin",
-    },
+          note: parsed.reason ?? null,
+          unitSellingPrice: parsed.unitSellingPrice ?? null,
+          originalPrice: originalPrice ?? null,
+          performedByName: session.user.name ?? session.user.email ?? "Admin",
+        },
+      },
+    });
   });
 
   revalidateInventory();
@@ -384,78 +539,53 @@ export async function adjustStock(
 export async function adjustVariantStock(
   input: AdjustVariantStockInput,
 ) {
-  const session =
-    await requireSession();
+  const session = await requireSession();
 
-  if (
-    !hasPermission(
-      session.user.role,
-      "inventory:write",
-    )
-  ) {
-    throw new Error(
-      "FORBIDDEN: you do not have permission to adjust inventory",
-    );
+  if (!hasPermission(session.user.role, "inventory:write")) {
+    throw new Error("FORBIDDEN: you do not have permission to adjust inventory");
   }
 
-  const parsed =
-    adjustVariantStockSchema.parse(
-      input,
-    );
+  const parsed = adjustVariantStockSchema.parse(input);
 
-  const variant =
-    await prisma.productVariant.findUniqueOrThrow(
-      {
-        where: {
-          id: parsed.variantId,
-        },
+  // Lock the variant row before reading stock. Reservations and adjustments
+  // now serialize on the same database row.
+  await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "ProductVariant" WHERE "id" = ${parsed.variantId} FOR UPDATE
+    `;
+    if (locked.length === 0) {
+      throw new Error("Product variant not found");
+    }
 
-        include: {
-          product: {
-            select: {
-              id: true,
-              name: true,
-              sku: true,
-              price: true,
-            },
-          },
+    const variant = await tx.productVariant.findUniqueOrThrow({
+      where: { id: locked[0].id },
+      include: {
+        product: {
+          select: { id: true, name: true, sku: true, price: true },
         },
       },
+    });
+
+    assertEnoughStock(
+      variant.currentStock,
+      variant.reservedStock,
+      parsed.changeType,
+      parsed.quantity,
     );
 
-  assertEnoughStock(
-    variant.currentStock,
-    parsed.changeType,
-    parsed.quantity,
-  );
-
-  const beforeStock =
-    variant.currentStock;
-
-  const data =
-    computeStockDelta(
+    const beforeStock = variant.currentStock;
+    const data = computeStockDelta(
       variant,
       parsed.changeType,
       parsed.quantity,
       parsed.adjustmentReason,
     );
-
-  const afterStock =
-    calculateAfterStock(
-      beforeStock,
-      data,
-    );
-
-  const originalPrice =
-    parsed.adjustmentReason ===
-    "OFFLINE_SALE"
-      ? Number(
-          variant.product.price,
-        )
-      : undefined;
-
-  const reason =
-    formatAdjustmentReason(
+    const afterStock = calculateAfterStock(beforeStock, data);
+    const originalPrice =
+      parsed.adjustmentReason === "OFFLINE_SALE"
+        ? Number(variant.product.price)
+        : undefined;
+    const reason = formatAdjustmentReason(
       parsed.adjustmentReason,
       parsed.reason,
       parsed.unitSellingPrice,
@@ -463,105 +593,46 @@ export async function adjustVariantStock(
       parsed.businessDate,
     );
 
-  await prisma.$transaction([
-    prisma.productVariant.update(
-      {
-        where: {
-          id: variant.id,
-        },
-
-        data,
+    await tx.productVariant.update({
+      where: { id: variant.id },
+      data,
+    });
+    await tx.variantInventoryLog.create({
+      data: {
+        variantId: variant.id,
+        changeType: parsed.changeType,
+        quantity: parsed.quantity,
+        reason,
+        performedById: session.user.id,
       },
-    ),
-
-    prisma.variantInventoryLog.create(
-      {
-        data: {
-          variantId:
-            variant.id,
-
-          changeType:
-            parsed.changeType,
-
-          quantity:
-            parsed.quantity,
-
-          reason,
-
-          performedById:
-            session.user.id,
-        },
-      },
-    ),
-  ]);
-
-  await logActivity({
-    userId: session.user.id,
-
-    action: activityAction(
-      parsed.adjustmentReason,
-    ),
-
-    resource:
-      `ProductVariant:${variant.id}`,
-
-    metadata: {
-      productId:
-        variant.product.id,
-
-      productName:
-        variant.product.name,
-
-      productSku:
-        variant.product.sku,
-
-      variantId:
-        variant.id,
-
-      variantLabel:
-        variant.value,
-
-      variantSku:
-        variant.sku,
-
-      targetKind: "variant",
-
-      changeType:
-        parsed.changeType,
-
-      adjustmentReason:
-        parsed.adjustmentReason,
-
-      businessDate:
-        parsed.businessDate,
-
-      requestedQuantity:
-        parsed.quantity,
-
-      quantityChanged:
-        actualQuantityChanged(
+    });
+    await tx.activityLog.create({
+      data: {
+        userId: session.user.id,
+        action: activityAction(parsed.adjustmentReason),
+        resource: `ProductVariant:${variant.id}`,
+        metadata: {
+          productId: variant.product.id,
+          productName: variant.product.name,
+          productSku: variant.product.sku,
+          variantId: variant.id,
+          variantLabel: variant.value,
+          variantSku: variant.sku,
+          targetKind: "variant",
+          changeType: parsed.changeType,
+          adjustmentReason: parsed.adjustmentReason,
+          businessDate: parsed.businessDate,
+          requestedQuantity: parsed.quantity,
+          quantityChanged: actualQuantityChanged(beforeStock, afterStock),
           beforeStock,
           afterStock,
-        ),
-
-      beforeStock,
-      afterStock,
-
-      note:
-        parsed.reason ?? null,
-
-      unitSellingPrice:
-        parsed.unitSellingPrice ??
-        null,
-
-      originalPrice:
-        originalPrice ?? null,
-
-      performedByName:
-        session.user.name ??
-        session.user.email ??
-        "Admin",
-    },
+          note: parsed.reason ?? null,
+          unitSellingPrice: parsed.unitSellingPrice ?? null,
+          originalPrice: originalPrice ?? null,
+          performedByName: session.user.name ?? session.user.email ?? "Admin",
+        },
+      },
+    });
   });
 
   revalidateInventory();
@@ -595,7 +666,7 @@ export async function listInventory(
     pageSize?: number;
   },
 ) {
-  await requireSession();
+  await requireInventoryRead();
 
   const {
     skip,
@@ -788,12 +859,13 @@ export async function listInventory(
 
         variants,
 
+        // currentStock already excludes reserved units. Total physical
+        // on-hand is available currentStock plus reservedStock.
         totalStock: base
-          ? base.currentStock
+          ? base.currentStock + base.reservedStock
           : variants.reduce(
               (sum, v) =>
-                sum +
-                v.currentStock,
+                sum + v.currentStock + v.reservedStock,
               0,
             ),
 
@@ -841,7 +913,7 @@ export async function listInventory(
 export async function getInventoryHistory(
   productId: string,
 ) {
-  await requireSession();
+  await requireInventoryRead();
 
   const inventory =
     await prisma.inventory.findUniqueOrThrow(
@@ -893,7 +965,7 @@ export async function getInventoryHistory(
 export async function getVariantInventoryHistory(
   variantId: string,
 ) {
-  await requireSession();
+  await requireInventoryRead();
 
   const history =
     await prisma.variantInventoryLog.findMany(
@@ -933,7 +1005,7 @@ export async function getVariantInventoryHistory(
 }
 
 export async function getLowStockCount() {
-  await requireSession();
+  await requireInventoryRead();
 
   const [
     baseInventories,
@@ -942,6 +1014,7 @@ export async function getLowStockCount() {
     prisma.inventory.findMany({
       select: {
         currentStock: true,
+        reservedStock: true,
         soldStock: true,
         lowStockThreshold: true,
       },
@@ -957,6 +1030,7 @@ export async function getLowStockCount() {
 
         select: {
           currentStock: true,
+          reservedStock: true,
           soldStock: true,
           lowStockThreshold: true,
         },
