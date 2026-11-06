@@ -1,17 +1,20 @@
 const { PrismaClient } = require("@prisma/client");
 
-const expectedEndpoint = "ep-polished-cake-bb2c38wv";
+const expectedProjectId = "winter-math-06173043";
 const previewUrl = process.env.PREVIEW_DATABASE_URL;
+const previewProjectId = process.env.PREVIEW_NEON_PROJECT_ID;
 
 if (!previewUrl) {
   throw new Error("PREVIEW_DATABASE_URL is missing; refusing to test or use the Production database.");
 }
-
-const parsedUrl = new URL(previewUrl);
-if (!parsedUrl.hostname.includes(expectedEndpoint)) {
-  throw new Error("PREVIEW_DATABASE_URL does not point to the approved giftij-brandy-preview-test Neon endpoint.");
+if (previewProjectId !== expectedProjectId) {
+  throw new Error("PREVIEW_NEON_PROJECT_ID does not match the approved giftij-brandy-preview-test Neon project.");
 }
 
+const parsedUrl = new URL(previewUrl);
+if (!parsedUrl.hostname.endsWith(".aws.neon.tech") || !parsedUrl.hostname.includes("c-15.us-east-1")) {
+  throw new Error("PREVIEW_DATABASE_URL is not an AWS us-east-1 Neon endpoint.");
+}
 if (previewUrl === process.env.DATABASE_URL) {
   throw new Error("Preview and default database URLs unexpectedly match.");
 }
@@ -37,8 +40,8 @@ async function main() {
     throw new Error("Preview database schema is incomplete.");
   }
 
-  console.log("[preview-db-check] PASS: isolated Neon endpoint, PostgreSQL connection, schema, and all 11 migrations verified.");
-  console.log("[preview-db-check] Database:", identity[0].database_name, "|", identity[0].postgres_version);
+  console.log("[preview-db-check] PASS: approved Neon project, database connection, schema, and all 11 migrations verified.");
+  console.log("[preview-db-check] Database:", identity[0].database_name, "|", identity[0].postgres_version, "|", parsedUrl.hostname);
 }
 
 main()
