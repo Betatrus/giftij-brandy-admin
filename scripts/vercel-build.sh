@@ -6,6 +6,7 @@ set -eu
 if [ "${RUN_PREVIEW_MIGRATIONS:-}" = "1" ]; then
   echo "Applying Prisma migrations to the isolated Preview database."
   npx prisma migrate deploy
+  node scripts/verify-preview-db.cjs
 fi
 
 npm run build
