@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 
-// Paths only a Super Admin may even load — Support Admin is redirected,
+// Paths reserved for Super Admin and Technical Support; Support Admin is redirected,
 // not just visually blocked, so there's no client-side data flash.
 // Previously this checked bare "/settings" and "/staff", which never
 // matched anything — the real pages live under "/admin/settings" and
