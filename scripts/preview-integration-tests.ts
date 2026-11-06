@@ -683,6 +683,8 @@ async function cleanup() {
   });
   const resources = [
     ...paymentReferences.map((reference) => `PaystackReference:${reference}`),
+    "PaystackEvent:charge.success",
+    "PaystackEvent:charge.failed",
     ...orders.map((order) => `Order:${order.id}`),
     ...customers.map((customer) => `Customer:${customer.id}`),
   ];
@@ -695,8 +697,22 @@ async function cleanup() {
   if (customers.length) {
     await prisma.customer.deleteMany({ where: { id: { in: customers.map((customer) => customer.id) } } });
   }
-  if (reservationIds.length) {
-    await prisma.checkoutReservation.deleteMany({ where: { id: { in: reservationIds } } });
+  const testReservations = await prisma.checkoutReservation.findMany({
+    select: { id: true, cart: true },
+  });
+  const reservationIdsForCleanup = new Set(reservationIds);
+  for (const reservation of testReservations) {
+    if (Array.isArray(reservation.cart) && reservation.cart.some((line) =>
+      typeof line === "object" && line !== null && "productId" in line &&
+      typeof line.productId === "string" && productIds.includes(line.productId)
+    )) {
+      reservationIdsForCleanup.add(reservation.id);
+    }
+  }
+  if (reservationIdsForCleanup.size) {
+    await prisma.checkoutReservation.deleteMany({
+      where: { id: { in: Array.from(reservationIdsForCleanup) } },
+    });
   }
   if (productIds.length) {
     await prisma.productVariant.deleteMany({ where: { productId: { in: productIds } } });
