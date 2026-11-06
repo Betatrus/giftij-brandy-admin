@@ -447,7 +447,7 @@ export async function POST(
       // The lock + existence check + insert share one transaction, so
       // concurrent Paystack redeliveries cannot create duplicate review rows.
       await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))::text AS lock_result`;
         const existingReview = await tx.activityLog.findFirst({
           where: {
             action: "PAYMENT_REVIEW_REQUIRED",
@@ -641,7 +641,7 @@ async function handleChargeSuccess(
     await prisma.$transaction(
       async (tx) => {
         // Serialize a payment reference across all serverless instances.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))::text AS lock_result`;
 
         const duplicate = await tx.order.findFirst({
           where: { paymentReference: data.reference },
