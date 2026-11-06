@@ -13,6 +13,11 @@ import {
   StockReservationUnavailableError,
 } from "../lib/orders/stock-reservation";
 import { POST as paystackWebhook } from "../app/api/webhooks/paystack/route";
+import { POST as checkoutInitialize } from "../app/api/v1/public/checkout/initialize/route";
+import { GET as reservationCron } from "../app/api/cron/expire-checkout-reservations/route";
+import { GET as publicBlog } from "../app/api/v1/public/blog/route";
+import { GET as publicBlogPost } from "../app/api/v1/public/blog/[slug]/route";
+import { GET as publicBlogSettings } from "../app/api/v1/public/blog-settings/route";
 
 const TEST_PAYSTACK_SECRET = "giftij-preview-only-mocked-paystack-secret";
 process.env.PAYSTACK_SECRET_KEY = TEST_PAYSTACK_SECRET;
@@ -22,7 +27,11 @@ const productIds: string[] = [];
 const reservationIds: string[] = [];
 const paymentReferences: string[] = [];
 const customerEmails: string[] = [];
+const blogCategoryIds: string[] = [];
+const blogPostIds: string[] = [];
 const mockVerifications = new Map<string, { amount: number; currency: string }>();
+const initializeResponses: Array<Record<string, unknown>> = [];
+let lastInitializeBody: Record<string, any> | null = null;
 const originalFetch = globalThis.fetch;
 
 function logPass(name: string) {
@@ -157,7 +166,7 @@ function eventFor(
   };
 }
 
-async function callWebhook(payload: ReturnType<typeof eventFor>, signatureOverride?: string) {
+async function callWebhook(payload: object, signatureOverride?: string) {
   const body = JSON.stringify(payload);
   const signature = signatureOverride ??
     createHmac("sha512", TEST_PAYSTACK_SECRET).update(body).digest("hex");
@@ -173,8 +182,17 @@ async function callWebhook(payload: ReturnType<typeof eventFor>, signatureOverri
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
-globalThis.fetch = (async (input: RequestInfo | URL) => {
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
+  if (url.endsWith("/transaction/initialize")) {
+    lastInitializeBody = JSON.parse(String(init?.body ?? "{}"));
+    const response = initializeResponses.shift() ?? { status: false, message: "No preview initialize mock configured." };
+    return new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   const reference = decodeURIComponent(url.split("/").pop() ?? "");
   const verification = mockVerifications.get(reference);
   if (!verification) {
@@ -196,6 +214,20 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
     headers: { "content-type": "application/json" },
   });
 }) as typeof fetch;
+
+async function callCheckout(body: object) {
+  const request = new NextRequest("https://giftij-preview-test.invalid/api/v1/public/checkout/initialize", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      origin: process.env.STOREFRONT_URL ?? "https://storefront-preview.invalid",
+      "x-forwarded-for": "127.0.0.1",
+    },
+    body: JSON.stringify(body),
+  });
+  const response = await checkoutInitialize(request);
+  return { status: response.status, body: await response.json() as Record<string, unknown> };
+}
 
 async function main() {
   if (process.env.VERCEL_ENV !== "preview" || !process.env.PREVIEW_DATABASE_URL) {
@@ -300,6 +332,184 @@ async function main() {
     assert.equal(saved.status, "EXPIRED");
     assert.deepEqual(await inventoryFor(productId), { currentStock: 3, reservedStock: 0, soldStock: 0 });
     logPass("expired reservation cleanup is idempotent");
+  }
+
+  // Checkout initialization reserves stock before Paystack and releases it if Paystack init fails.
+  {
+    const productId = await createInventoryProduct("init-failure", 3);
+    const product = await prisma.product.findUniqueOrThrow({
+      where: { id: productId },
+      select: { slug: true },
+    });
+    initializeResponses.push({ status: false, message: "Mocked Paystack initialization failure." });
+    const result = await callCheckout({
+      email: customerEmail("init-failure"),
+      cart: [{ productSlug: product.slug, quantity: 2 }],
+      shippingAddress: {
+        fullName: "Preview Test Customer",
+        phone: "08000000000",
+        address: "1 Preview Test Road",
+        city: "Lagos",
+        state: "Lagos",
+        country: "Nigeria",
+      },
+    });
+    assert.notEqual(result.status, 200);
+    assert.deepEqual(await inventoryFor(productId), { currentStock: 3, reservedStock: 0, soldStock: 0 });
+    logPass("failed Paystack initialization releases the temporary reservation");
+  }
+
+  // Full checkout-to-webhook flow, including callback URL, amount snapshot and concurrent duplicate notifications.
+  {
+    const productId = await createInventoryProduct("checkout-flow", 4);
+    const product = await prisma.product.findUniqueOrThrow({
+      where: { id: productId },
+      select: { slug: true },
+    });
+    const reference = newReference("CHECKOUT_FLOW");
+    const email = customerEmail("checkout-flow");
+    initializeResponses.push({
+      status: true,
+      data: {
+        authorization_url: "https://checkout.paystack.test/preview",
+        access_code: "preview-test-access-code",
+        reference,
+      },
+    });
+    const checkout = await callCheckout({
+      email,
+      cart: [{ productSlug: product.slug, quantity: 2 }],
+      shippingAddress: {
+        fullName: "Preview Test Customer",
+        phone: "08000000000",
+        address: "1 Preview Test Road",
+        city: "Lagos",
+        state: "Lagos",
+        country: "Nigeria",
+      },
+    });
+    assert.equal(checkout.status, 200);
+    assert.ok(lastInitializeBody);
+    assert.equal(lastInitializeBody.callback_url, `${process.env.STOREFRONT_URL}/checkout/callback`);
+    const metadata = lastInitializeBody.metadata;
+    assert.equal(metadata.expectedAmountKobo, 20_000);
+    assert.equal(metadata.cart[0].productId, productId);
+    const reservationId = String(metadata.reservationId);
+    reservationIds.push(reservationId);
+    const reservation = await prisma.checkoutReservation.findUniqueOrThrow({
+      where: { id: reservationId },
+      select: { status: true, paymentReference: true },
+    });
+    assert.equal(reservation.status, "ACTIVE");
+    assert.equal(reservation.paymentReference, reference);
+    assert.deepEqual(await inventoryFor(productId), { currentStock: 2, reservedStock: 2, soldStock: 0 });
+
+    const payload = {
+      event: "charge.success",
+      data: {
+        reference,
+        amount: metadata.expectedAmountKobo,
+        currency: "NGN",
+        customer: { email, first_name: "Preview", last_name: "Test" },
+        metadata,
+      },
+    };
+    mockVerifications.set(reference, { amount: 20_000, currency: "NGN" });
+    const results = await Promise.all([callWebhook(payload), callWebhook(payload)]);
+    assert.ok(results.every((result) => result.status === 200));
+    assert.equal(await prisma.order.count({ where: { paymentReference: reference } }), 1);
+    assert.deepEqual(await inventoryFor(productId), { currentStock: 2, reservedStock: 0, soldStock: 2 });
+    logPass("checkout initialization to verified payment consumes stock once and ignores concurrent duplicates");
+  }
+
+  // Public blog endpoints expose only published content to the shared Preview API key.
+  {
+    const storefrontSecret = process.env.STOREFRONT_API_SECRET?.trim();
+    if (!storefrontSecret) throw new Error("STOREFRONT_API_SECRET is required for Preview blog API tests.");
+    await prisma.storeSettings.upsert({
+      where: { id: "singleton" },
+      create: { id: "singleton", blogNavigationVisible: true, blogIndexingEnabled: false },
+      update: { blogNavigationVisible: true, blogIndexingEnabled: false },
+    });
+    const category = await prisma.blogCategory.create({
+      data: { name: "Preview Tests", slug: `preview-tests-${suffix}` },
+      select: { id: true },
+    });
+    blogCategoryIds.push(category.id);
+    const published = await prisma.blogPost.create({
+      data: {
+        title: "Preview Published Article",
+        slug: `preview-published-${suffix}`,
+        excerpt: "Temporary published article for Preview API tests.",
+        contentMarkdown: "# Preview article\n\nTemporary content.",
+        status: "PUBLISHED",
+        publishedAt: new Date(Date.now() - 60_000),
+        isIndexable: true,
+        categoryId: category.id,
+      },
+      select: { id: true, slug: true },
+    });
+    blogPostIds.push(published.id);
+    const draft = await prisma.blogPost.create({
+      data: {
+        title: "Preview Draft Article",
+        slug: `preview-draft-${suffix}`,
+        excerpt: "Temporary draft article for Preview API tests.",
+        contentMarkdown: "Draft content.",
+        status: "DRAFT",
+        categoryId: category.id,
+      },
+      select: { id: true, slug: true },
+    });
+    blogPostIds.push(draft.id);
+    await prisma.blogPostSlugRedirect.create({
+      data: { fromSlug: `preview-old-${suffix}`, postId: published.id },
+    });
+
+    const origin = process.env.STOREFRONT_URL ?? "https://storefront-preview.invalid";
+    const headers = { "X-Storefront-Key": storefrontSecret, origin };
+    const listResponse = await publicBlog(new NextRequest("https://admin-preview.invalid/api/v1/public/blog", { headers }));
+    assert.equal(listResponse.status, 200);
+    assert.equal(listResponse.headers.get("access-control-allow-origin"), origin);
+    const listPayload = await listResponse.json() as { success: boolean; data: Array<{ slug: string; isIndexable: boolean }> };
+    assert.equal(listPayload.success, true);
+    assert.ok(listPayload.data.some((post) => post.slug === published.slug));
+    assert.ok(!listPayload.data.some((post) => post.slug === draft.slug));
+    assert.equal(listPayload.data.find((post) => post.slug === published.slug)?.isIndexable, false);
+
+    await prisma.storeSettings.update({
+      where: { id: "singleton" },
+      data: { blogIndexingEnabled: true },
+    });
+    const settingsResponse = await publicBlogSettings(new NextRequest("https://admin-preview.invalid/api/v1/public/blog-settings", { headers }));
+    const settingsPayload = await settingsResponse.json() as { data: { blogNavigationVisible: boolean; blogIndexingEnabled: boolean } };
+    assert.equal(settingsPayload.data.blogNavigationVisible, true);
+    assert.equal(settingsPayload.data.blogIndexingEnabled, true);
+
+    const articleResponse = await publicBlogPost(
+      new NextRequest(`https://admin-preview.invalid/api/v1/public/blog/${published.slug}`, { headers }),
+      { params: Promise.resolve({ slug: published.slug }) },
+    );
+    const articlePayload = await articleResponse.json() as { data: { contentMarkdown: string } };
+    assert.equal(articleResponse.status, 200);
+    assert.ok(articlePayload.data.contentMarkdown.includes("Temporary content"));
+
+    const draftResponse = await publicBlogPost(
+      new NextRequest(`https://admin-preview.invalid/api/v1/public/blog/${draft.slug}`, { headers }),
+      { params: Promise.resolve({ slug: draft.slug }) },
+    );
+    assert.equal(draftResponse.status, 404);
+
+    const redirectResponse = await publicBlogPost(
+      new NextRequest(`https://admin-preview.invalid/api/v1/public/blog/preview-old-${suffix}`, { headers }),
+      { params: Promise.resolve({ slug: `preview-old-${suffix}` }) },
+    );
+    const redirectPayload = await redirectResponse.json() as { redirectTo: string };
+    assert.equal(redirectPayload.redirectTo, published.slug);
+
+    const unauthorized = await publicBlog(new NextRequest("https://admin-preview.invalid/api/v1/public/blog"));
+    assert.equal(unauthorized.status, 401);
+    logPass("blog list/detail/settings, draft exclusion, indexability, redirects, API key and CORS");
   }
 
   // Failed Paystack charge releases its reservation; signature is verified locally.
@@ -426,9 +636,43 @@ async function main() {
     assert.deepEqual(await inventoryFor(productId), { currentStock: 0, reservedStock: 1, soldStock: 0 });
     logPass("late verified payment is flagged Paid - Stock Unavailable without overselling");
   }
+  // The scheduled cleanup endpoint requires its Preview-only bearer secret.
+  {
+    const cronSecret = process.env.CRON_SECRET?.trim();
+    if (!cronSecret) throw new Error("CRON_SECRET is required for Preview cron tests.");
+    const productId = await createInventoryProduct("cron", 2);
+    const reservation = await reserveStockForCheckout([{ productId, quantity: 1 }]);
+    reservationIds.push(reservation.reservationId);
+    await prisma.checkoutReservation.update({
+      where: { id: reservation.reservationId },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    });
+    const wrongAuth = await reservationCron(new NextRequest("https://admin-preview.invalid/api/cron/expire-checkout-reservations", {
+      headers: { authorization: "Bearer wrong-preview-secret" },
+    }));
+    assert.equal(wrongAuth.status, 401);
+    assert.deepEqual(await inventoryFor(productId), { currentStock: 1, reservedStock: 1, soldStock: 0 });
+
+    const authorized = await reservationCron(new NextRequest("https://admin-preview.invalid/api/cron/expire-checkout-reservations", {
+      headers: { authorization: `Bearer ${cronSecret}` },
+    }));
+    assert.equal(authorized.status, 200);
+    const cronPayload = await authorized.json() as { ok: boolean; released: number };
+    assert.equal(cronPayload.ok, true);
+    assert.equal(cronPayload.released, 1);
+    assert.deepEqual(await inventoryFor(productId), { currentStock: 2, reservedStock: 0, soldStock: 0 });
+    logPass("Preview cron authentication and expired-reservation release");
+  }
 }
 
 async function cleanup() {
+  if (blogPostIds.length) {
+    await prisma.blogPost.deleteMany({ where: { id: { in: blogPostIds } } });
+  }
+  if (blogCategoryIds.length) {
+    await prisma.blogCategory.deleteMany({ where: { id: { in: blogCategoryIds } } });
+  }
+  await prisma.storeSettings.deleteMany({ where: { id: "singleton" } });
   const orders = await prisma.order.findMany({
     where: { paymentReference: { in: paymentReferences } },
     select: { id: true, customerId: true },
