@@ -133,7 +133,7 @@ export function StaffTable({ currentUserId, canAssignElevatedRoles }: { currentU
                       className="rounded-lg border border-cream px-2 py-1 text-xs font-body bg-white"
                     >
                       <option value="SUPPORT_ADMIN">Support Admin</option>
-                      {canAssignElevatedRoles && <option value="TECHNICAL_SUPPORT">Technical Support</option>}
+                      <option value="TECHNICAL_SUPPORT">Technical Support</option>
                       {canAssignElevatedRoles && <option value="SUPER_ADMIN">Super Admin</option>}
                     </select>
                   </td>
