@@ -411,18 +411,25 @@ async function main() {
       event: "charge.success",
       data: {
         reference,
-        amount: metadata.expectedAmountKobo,
+        // Simulate Paystack passing its NGN153 customer-paid fee through
+        // on top of the NGN200 product subtotal.
+        amount: metadata.expectedAmountKobo + 153,
         currency: "NGN",
         customer: { email, first_name: "Preview", last_name: "Test" },
         metadata,
       },
     };
-    mockVerifications.set(reference, { amount: 20_000, currency: "NGN" });
+    mockVerifications.set(reference, { amount: 20_153, currency: "NGN" });
     const results = await Promise.all([callWebhook(payload), callWebhook(payload)]);
     assert.ok(results.every((result) => result.status === 200));
     assert.equal(await prisma.order.count({ where: { paymentReference: reference } }), 1);
+    const paidOrder = await prisma.order.findUniqueOrThrow({
+      where: { paymentReference: reference },
+      select: { subtotal: true },
+    });
+    assert.equal(Number(paidOrder.subtotal), 200);
     assert.deepEqual(await inventoryFor(productId), { currentStock: 2, reservedStock: 0, soldStock: 2 });
-    logPass("checkout initialization to verified payment consumes stock once and ignores concurrent duplicates");
+    logPass("checkout initialization accepts customer-paid Paystack fees, preserves product subtotal, and consumes stock once");
   }
 
   // Public blog endpoints expose only published content to the shared Preview API key.
