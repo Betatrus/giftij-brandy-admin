@@ -7,7 +7,7 @@ import { BlogEditor } from "@/components/admin/blog/blog-editor";
 export default async function EditBlogPostPage({params}:{params:Promise<{id:string}>}) {
   const session = await auth();
   if (!session?.user) redirect("/login");
-  if (session.user.role !== "SUPER_ADMIN") redirect("/admin/dashboard");
+  if (!["SUPER_ADMIN", "TECHNICAL_SUPPORT", "SUPPORT_ADMIN"].includes(session.user.role)) redirect("/admin/dashboard");
   const {id}=await params;
   const [post,categories]=await Promise.all([
     prisma.blogPost.findUnique({where:{id}}),
