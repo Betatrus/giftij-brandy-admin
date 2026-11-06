@@ -28,6 +28,7 @@ type NavItem = {
   href: string;
   icon: React.ElementType;
   superAdminOnly?: boolean;
+  blogManagerOnly?: boolean;
 };
 
 const NAV_ITEMS: NavItem[] = [
@@ -40,7 +41,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: "Communications", href: "/admin/communications", icon: MessageSquare },
   { label: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { label: "Reports", href: "/admin/reports", icon: FileText },
-  { label: "Blog Management", href: "/admin/blog", icon: BookOpen, superAdminOnly: true },
+  { label: "Blog Management", href: "/admin/blog", icon: BookOpen, blogManagerOnly: true },
   { label: "Categories", href: "/admin/categories", icon: Tag, superAdminOnly: true },
   { label: "Settings", href: "/admin/settings", icon: Settings },
   { label: "Staff", href: "/admin/staff", icon: UserCog, superAdminOnly: true },
@@ -65,7 +66,7 @@ export function Sidebar({
   const guardedClick = useGuardedClick();
   const { confirmNavigation } = useUnsavedChanges();
   const visibleItems = NAV_ITEMS.filter(
-    (item) => !item.superAdminOnly || role === "SUPER_ADMIN"
+    (item) => (!item.superAdminOnly || role === "SUPER_ADMIN") && (!item.blogManagerOnly || role === "SUPER_ADMIN" || role === "SUPPORT_ADMIN")
   );
 
   return (
