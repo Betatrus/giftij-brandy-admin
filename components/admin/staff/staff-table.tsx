@@ -127,7 +127,6 @@ export function StaffTable({ currentUserId, canAssignElevatedRoles }: { currentU
                   <td className="px-4 py-3">
                     <select
                       value={u.role}
-                      disabled={pendingId === u.id}
                       onChange={(e) => handleRoleChange(u.id, e.target.value as "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN")}
                       disabled={!canAssignElevatedRoles || pendingId === u.id}
                       className="rounded-lg border border-cream px-2 py-1 text-xs font-body bg-white"
@@ -204,7 +203,6 @@ export function StaffTable({ currentUserId, canAssignElevatedRoles }: { currentU
 
               <select
                 value={u.role}
-                disabled={pendingId === u.id}
                 onChange={(e) => handleRoleChange(u.id, e.target.value as "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN")}
                 disabled={!canAssignElevatedRoles || pendingId === u.id}
                 className="w-full mt-2 rounded-lg border border-cream px-2 py-1.5 text-sm font-body bg-white"
