@@ -7,7 +7,7 @@ import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 export default async function BlogPreviewPage({params}:{params:Promise<{id:string}>}) {
   const session=await auth();
   if(!session?.user)redirect("/login");
-  if(session.user.role!=="SUPER_ADMIN")redirect("/admin/dashboard");
+  if(!["SUPER_ADMIN","TECHNICAL_SUPPORT","SUPPORT_ADMIN"].includes(session.user.role))redirect("/admin/dashboard");
   const {id}=await params;
   const post=await prisma.blogPost.findUnique({where:{id},include:{category:{select:{name:true}}}});
   if(!post)notFound();
