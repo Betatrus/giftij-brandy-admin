@@ -9,7 +9,7 @@ export default async function StaffPage() {
   // Belt-and-suspenders: middleware already blocks Support Admin from
   // this route, but the page checks too rather than relying on a single
   // layer — same pattern as financial-field stripping elsewhere.
-  if (session?.user?.role !== "SUPER_ADMIN") {
+  if (session?.user?.role !== "SUPER_ADMIN" && session?.user?.role !== "TECHNICAL_SUPPORT") {
     redirect("/admin/dashboard?denied=1");
   }
 
@@ -20,7 +20,7 @@ export default async function StaffPage() {
       <p className="font-body text-sm text-ink/50 mb-6">
         Manage admin accounts, roles, and access.
       </p>
-      <StaffTable currentUserId={session.user.id} />
+      <StaffTable currentUserId={session.user.id} canAssignElevatedRoles={session.user.role === "SUPER_ADMIN"} />
     </div>
   );
 }
