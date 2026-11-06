@@ -1,6 +1,7 @@
 const { PrismaClient } = require("@prisma/client");
 
 const expectedProjectId = "winter-math-06173043";
+const expectedEndpoint = "ep-solitary-sea-bbod87tf";
 const previewUrl = process.env.PREVIEW_DATABASE_URL;
 const previewProjectId = process.env.PREVIEW_NEON_PROJECT_ID;
 
@@ -12,7 +13,7 @@ if (previewProjectId !== expectedProjectId) {
 }
 
 const parsedUrl = new URL(previewUrl);
-if (!parsedUrl.hostname.endsWith(".aws.neon.tech") || !parsedUrl.hostname.includes("c-15.us-east-1")) {
+if (!parsedUrl.hostname.includes(expectedEndpoint) || !parsedUrl.hostname.endsWith(".aws.neon.tech") || !parsedUrl.hostname.includes("c-15.us-east-1")) {
   throw new Error("PREVIEW_DATABASE_URL is not an AWS us-east-1 Neon endpoint.");
 }
 if (previewUrl === process.env.DATABASE_URL) {
