@@ -8,7 +8,7 @@ export default async function CategoriesPage() {
 
   // Taxonomy changes are a Super Admin decision — same page-level +
   // middleware belt-and-suspenders pattern used by /admin/staff.
-  if (session?.user?.role !== "SUPER_ADMIN") {
+  if (session?.user?.role !== "SUPER_ADMIN" && session?.user?.role !== "TECHNICAL_SUPPORT") {
     redirect("/admin/dashboard?denied=1");
   }
 
