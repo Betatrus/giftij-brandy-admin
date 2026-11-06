@@ -7,7 +7,7 @@ import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 export default async function BlogManagementPage() {
   const session = await auth();
   if (!session?.user) redirect("/login");
-  if (session.user.role !== "SUPER_ADMIN") redirect("/admin/dashboard");
+  if (!["SUPER_ADMIN", "TECHNICAL_SUPPORT", "SUPPORT_ADMIN"].includes(session.user.role)) redirect("/admin/dashboard");
   const posts = await prisma.blogPost.findMany({
     orderBy: [{ updatedAt: "desc" }],
     include: { category: { select: { name: true } } },
