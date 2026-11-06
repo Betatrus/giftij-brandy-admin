@@ -8,9 +8,9 @@ import { getStoreSettings } from "@/lib/actions/settings";
 
 export default async function SettingsPage() {
   const session = await auth();
-  const isSuperAdmin = session?.user?.role === "SUPER_ADMIN";
+  const isSuperAdmin = session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "TECHNICAL_SUPPORT";
   const whatsapp = isSuperAdmin ? await getCustomerCareWhatsApp() : null;
-  const canManageBlog = session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "SUPPORT_ADMIN";
+  const canManageBlog = session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "TECHNICAL_SUPPORT" || session?.user?.role === "SUPPORT_ADMIN";
   const storeSettings = canManageBlog ? await getStoreSettings() : null;
 
   return (
