@@ -66,7 +66,7 @@ export function Sidebar({
   const guardedClick = useGuardedClick();
   const { confirmNavigation } = useUnsavedChanges();
   const visibleItems = NAV_ITEMS.filter(
-    (item) => (!item.superAdminOnly || role === "SUPER_ADMIN") && (!item.blogManagerOnly || role === "SUPER_ADMIN" || role === "SUPPORT_ADMIN")
+    (item) => (!item.superAdminOnly || role === "SUPER_ADMIN" || role === "TECHNICAL_SUPPORT") && (!item.blogManagerOnly || role === "SUPER_ADMIN" || role === "TECHNICAL_SUPPORT" || role === "SUPPORT_ADMIN")
   );
 
   return (
