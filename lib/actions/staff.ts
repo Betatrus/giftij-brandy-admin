@@ -35,6 +35,9 @@ export async function listStaff() {
 export async function createStaff(input: CreateStaffInput) {
   const session = await requireStaffManager();
   const parsed = createStaffSchema.parse(input);
+  if (parsed.role !== "SUPPORT_ADMIN" && session.user.role !== "SUPER_ADMIN") {
+    throw new Error("FORBIDDEN: only a Super Admin can assign elevated staff roles");
+  }
 
   const existing = await prisma.user.findUnique({ where: { email: parsed.email } });
   if (existing) {
@@ -59,8 +62,12 @@ export async function createStaff(input: CreateStaffInput) {
   return user;
 }
 
-export async function updateStaffRole(userId: string, role: "SUPER_ADMIN" | "SUPPORT_ADMIN") {
+export async function updateStaffRole(userId: string, role: "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN") {
   const session = await requireStaffManager();
+  const target = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+  if (session.user.role !== "SUPER_ADMIN" && (role !== "SUPPORT_ADMIN" || target.role === "TECHNICAL_SUPPORT" || target.role === "SUPER_ADMIN")) {
+    throw new Error("FORBIDDEN: only a Super Admin can assign or revoke elevated staff roles");
+  }
 
   if (userId === session.user.id && role !== "SUPER_ADMIN") {
     throw new Error("You cannot remove your own Super Admin access.");
