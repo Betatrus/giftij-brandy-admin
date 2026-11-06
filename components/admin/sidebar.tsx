@@ -100,12 +100,13 @@ export function Sidebar({
             <Link
               key={item.href}
               href={item.href}
+              aria-current={active ? "page" : undefined}
               onClick={(e) => {
                 if (guardedClick(e)) onCloseMobile();
               }}
-              className={`flex items-center gap-3 px-3 py-2 rounded-xl font-body text-sm transition-colors ${
+              className={`flex min-h-10 items-center gap-3 rounded-xl px-3 py-2 font-body text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gold ${
                 active
-                  ? "bg-cream text-ink font-medium"
+                  ? "bg-cream text-ink font-medium ring-1 ring-gold/15"
                   : "text-ink/60 hover:bg-cream/60"
               }`}
             >
