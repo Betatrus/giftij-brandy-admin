@@ -4,7 +4,8 @@ const path = require("node:path");
 
 const expectedProjectId = "winter-math-06173043";
 const expectedEndpoint = "ep-solitary-sea-bbod87tf";
-// DIRECT_URL is the isolated Preview-only unpooled Neon connection used by Prisma Migrate.\nconst previewUrl = process.env.DIRECT_URL;
+// DIRECT_URL is the isolated Preview-only unpooled Neon connection used by Prisma Migrate.
+const previewUrl = process.env.DIRECT_URL;
 const previewProjectId = process.env.PREVIEW_NEON_PROJECT_ID;
 
 if (!previewUrl) {
@@ -36,14 +37,15 @@ async function main() {
   if (identity[0]?.database_name !== "neondb") {
     throw new Error("Preview database identity check failed.");
   }
-  const expectedMigrationCount = fs.readdirSync(path.join(__dirname, "..", "prisma", "migrations"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).length;\n  if (Number(migrationRows[0]?.count) !== expectedMigrationCount || Number(pendingRows[0]?.count) !== 0) {
+  const expectedMigrationCount = fs.readdirSync(path.join(__dirname, "..", "prisma", "migrations"), { withFileTypes: true }).filter((entry) => entry.isDirectory()).length;
+  if (Number(migrationRows[0]?.count) !== expectedMigrationCount || Number(pendingRows[0]?.count) !== 0) {
     throw new Error("Preview database migration history is incomplete or contains pending migrations.");
   }
   if (Number(tableRows[0]?.count) < 25) {
     throw new Error("Preview database schema is incomplete.");
   }
 
-  console.log("[preview-db-check] PASS: approved Neon project, database connection, schema, and all ${expectedMigrationCount} migrations verified.");
+  console.log(`[preview-db-check] PASS: approved Neon project, database connection, schema, and all ${expectedMigrationCount} migrations verified.`);
   console.log("[preview-db-check] Database:", identity[0].database_name, "|", identity[0].postgres_version, "|", parsedUrl.hostname);
 }
 
