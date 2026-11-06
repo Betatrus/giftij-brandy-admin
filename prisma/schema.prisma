@@ -19,8 +19,9 @@ enum CustomerRefundStatus {
 }
 
 enum StaffRole {
-  SUPER_ADMIN     // full access, including financial data
-  SUPPORT_ADMIN   // operational access only — financials hidden
+  SUPER_ADMIN       // full access, including financial data and role assignment
+  TECHNICAL_SUPPORT // full Admin access; elevated role assigned only by Super Admin
+  SUPPORT_ADMIN     // operational access only — financials hidden
 }
 
 model User {
