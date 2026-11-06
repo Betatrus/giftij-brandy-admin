@@ -12,12 +12,12 @@ type StaffRow = {
   id: string;
   name: string;
   email: string;
-  role: "SUPER_ADMIN" | "SUPPORT_ADMIN";
+  role: "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN";
   isActive: boolean;
   createdAt: Date;
 };
 
-export function StaffTable({ currentUserId }: { currentUserId: string }) {
+export function StaffTable({ currentUserId, canAssignElevatedRoles }: { currentUserId: string; canAssignElevatedRoles: boolean }) {
   const [rows, setRows] = useState<StaffRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -41,7 +41,7 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
     load();
   }, []);
 
-  async function handleRoleChange(userId: string, role: "SUPER_ADMIN" | "SUPPORT_ADMIN") {
+  async function handleRoleChange(userId: string, role: "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN") {
     setActionError(null);
     setPendingId(userId);
     try {
@@ -128,11 +128,13 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
                     <select
                       value={u.role}
                       disabled={pendingId === u.id}
-                      onChange={(e) => handleRoleChange(u.id, e.target.value as "SUPER_ADMIN" | "SUPPORT_ADMIN")}
+                      onChange={(e) => handleRoleChange(u.id, e.target.value as "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN")}
+                      disabled={!canAssignElevatedRoles || pendingId === u.id}
                       className="rounded-lg border border-cream px-2 py-1 text-xs font-body bg-white"
                     >
                       <option value="SUPPORT_ADMIN">Support Admin</option>
-                      <option value="SUPER_ADMIN">Super Admin</option>
+                      {canAssignElevatedRoles && <option value="TECHNICAL_SUPPORT">Technical Support</option>}
+                      {canAssignElevatedRoles && <option value="SUPER_ADMIN">Super Admin</option>}
                     </select>
                   </td>
                   <td className="px-4 py-3">
@@ -203,11 +205,13 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
               <select
                 value={u.role}
                 disabled={pendingId === u.id}
-                onChange={(e) => handleRoleChange(u.id, e.target.value as "SUPER_ADMIN" | "SUPPORT_ADMIN")}
+                onChange={(e) => handleRoleChange(u.id, e.target.value as "SUPER_ADMIN" | "TECHNICAL_SUPPORT" | "SUPPORT_ADMIN")}
+                disabled={!canAssignElevatedRoles || pendingId === u.id}
                 className="w-full mt-2 rounded-lg border border-cream px-2 py-1.5 text-sm font-body bg-white"
               >
                 <option value="SUPPORT_ADMIN">Support Admin</option>
-                <option value="SUPER_ADMIN">Super Admin</option>
+                {canAssignElevatedRoles && <option value="TECHNICAL_SUPPORT">Technical Support</option>}
+                {canAssignElevatedRoles && <option value="SUPER_ADMIN">Super Admin</option>}
               </select>
 
               <div className="flex flex-wrap items-center gap-4 pt-3 mt-3 border-t border-cream font-body text-xs">
@@ -243,6 +247,7 @@ export function StaffTable({ currentUserId }: { currentUserId: string }) {
 
       {showCreate && (
         <CreateStaffDialog
+          canAssignElevatedRoles={canAssignElevatedRoles}
           onClose={() => setShowCreate(false)}
           onDone={() => { setShowCreate(false); load(); }}
         />
