@@ -35,16 +35,11 @@ export default {
 
     try {
       const response = await fetch(target, {
-        method: "POST",
+        method: "GET",
         headers: {
           authorization: `Bearer ${cronSecret}`,
           "x-vercel-protection-bypass": protectionBypass,
-          "content-type": "application/json",
         },
-        body: JSON.stringify({
-          source: "neon-function-trigger",
-          scheduledAt: body.data?.scheduled_at ?? null,
-        }),
         signal: AbortSignal.timeout(20_000),
         cache: "no-store",
       });
