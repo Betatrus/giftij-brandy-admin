@@ -1,22 +1,8 @@
-import pg from "pg";
-
-const { Pool } = pg;
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 2,
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000,
-});
-
 function isValidTriggerDelivery(request, body) {
   const invocationId = request.headers.get("x-neon-trigger-invocation-id");
   return Boolean(
-    invocationId &&
-    body &&
-    body.version === 1 &&
-    body.invocation_id === invocationId &&
-    body.trigger?.type === "schedule"
+    invocationId && body && body.version === 1 &&
+    body.invocation_id === invocationId && body.trigger?.type === "schedule"
   );
 }
 
@@ -34,106 +20,48 @@ export default {
     }
 
     // Neon strips caller-supplied x-neon-* headers. Matching this header to
-    // the signed delivery body is the documented trigger authentication.
+    // the delivery body authenticates the scheduled invocation.
     if (!isValidTriggerDelivery(request, body)) {
       return Response.json({ error: "Unauthorized trigger delivery" }, { status: 401 });
     }
 
-    const client = await pool.connect();
+    const target = process.env.PREVIEW_CLEANUP_URL;
+    const cronSecret = process.env.CRON_SECRET;
+    const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    if (!target || !cronSecret || !protectionBypass) {
+      console.error("Missing Preview cleanup proxy configuration.");
+      return Response.json({ error: "Cleanup proxy is not configured" }, { status: 500 });
+    }
+
     try {
-      await client.query("BEGIN");
+      const response = await fetch(target, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${cronSecret}`,
+          "x-vercel-protection-bypass": protectionBypass,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          source: "neon-function-trigger",
+          scheduledAt: body.data?.scheduled_at ?? null,
+        }),
+        signal: AbortSignal.timeout(20_000),
+        cache: "no-store",
+      });
 
-      // Lock a bounded batch. SKIP LOCKED lets concurrent invocations and
-      // payment webhooks proceed without waiting on the same reservations.
-      const due = await client.query(
-        `SELECT id, cart
-           FROM "CheckoutReservation"
-          WHERE status = 'ACTIVE'
-            AND "expiresAt" <= NOW()
-          ORDER BY "expiresAt" ASC
-          LIMIT 50
-          FOR UPDATE SKIP LOCKED`
-      );
-
-      let released = 0;
-      for (const reservation of due.rows) {
-        if (!Array.isArray(reservation.cart) || reservation.cart.length === 0) {
-          throw new Error(`Reservation ${reservation.id} has an invalid cart.`);
-        }
-
-        for (const line of reservation.cart) {
-          const quantity = Number(line?.quantity);
-          const productId = line?.productId;
-          const variantId = line?.variantId ?? null;
-
-          if (
-            typeof productId !== "string" ||
-            !Number.isSafeInteger(quantity) ||
-            quantity <= 0 ||
-            !(variantId === null || typeof variantId === "string")
-          ) {
-            throw new Error(`Reservation ${reservation.id} has an invalid cart line.`);
-          }
-
-          const restored = variantId
-            ? await client.query(
-                `UPDATE "ProductVariant"
-                    SET "reservedStock" = "reservedStock" - $1,
-                        "currentStock" = "currentStock" + $1,
-                        "updatedAt" = NOW()
-                  WHERE id = $2
-                    AND "productId" = $3
-                    AND "reservedStock" >= $1`,
-                [quantity, variantId, productId]
-              )
-            : await client.query(
-                `UPDATE "Inventory"
-                    SET "reservedStock" = "reservedStock" - $1,
-                        "currentStock" = "currentStock" + $1,
-                        "updatedAt" = NOW()
-                  WHERE "productId" = $2
-                    AND "reservedStock" >= $1`,
-                [quantity, productId]
-              );
-
-          if (restored.rowCount !== 1) {
-            throw new Error(
-              `Could not safely restore reservation ${reservation.id} for product ${productId}.`
-            );
-          }
-        }
-
-        const marked = await client.query(
-          `UPDATE "CheckoutReservation"
-              SET status = 'EXPIRED',
-                  "releasedAt" = NOW(),
-                  "updatedAt" = NOW()
-            WHERE id = $1
-              AND status = 'ACTIVE'
-              AND "expiresAt" <= NOW()`,
-          [reservation.id]
+      const responseBody = await response.text();
+      if (!response.ok) {
+        console.error("Preview cleanup endpoint failed", response.status, responseBody.slice(0, 500));
+        return Response.json(
+          { error: "Preview cleanup endpoint failed", status: response.status },
+          { status: 502 },
         );
-
-        if (marked.rowCount !== 1) {
-          throw new Error(`Reservation ${reservation.id} changed during expiry.`);
-        }
-
-        released += 1;
       }
 
-      await client.query("COMMIT");
-      return Response.json({
-        ok: true,
-        checkedAt: new Date().toISOString(),
-        scanned: due.rowCount,
-        released,
-      });
+      return Response.json({ ok: true, previewResponse: responseBody });
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
-      console.error("Checkout reservation expiry failed:", error);
-      return Response.json({ error: "Reservation expiry failed" }, { status: 500 });
-    } finally {
-      client.release();
+      console.error("Could not reach Preview cleanup endpoint:", error);
+      return Response.json({ error: "Could not reach Preview cleanup endpoint" }, { status: 502 });
     }
   },
 };
