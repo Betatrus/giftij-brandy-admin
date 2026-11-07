@@ -25,6 +25,8 @@ export default {
       return Response.json({ error: "Unauthorized trigger delivery" }, { status: 401 });
     }
 
+    console.log("Reservation expiry trigger received", { scheduledAt: body.data?.scheduled_at ?? null });
+
     const target = process.env.PREVIEW_CLEANUP_URL;
     const cronSecret = process.env.CRON_SECRET;
     const protectionBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
@@ -53,6 +55,7 @@ export default {
         );
       }
 
+      console.log("Reservation expiry cleanup completed", { status: response.status, responseBody });
       return Response.json({ ok: true, previewResponse: responseBody });
     } catch (error) {
       console.error("Could not reach Preview cleanup endpoint:", error);
