@@ -162,9 +162,13 @@ async function verifySuccessfulTransaction(
     );
   }
 
-  if (verified.amount !== Number(expectedAmount)) {
-    throw new PaymentVerificationMismatchError(
-      "Verified Paystack amount does not match the server-calculated checkout amount.",
+  // Paystack's customer-pays-fees setting can make the amount charged
+  // higher than Giftij's server-calculated product subtotal. The checkout
+  // amount remains the lower bound; the extra provider fee is not revenue
+  // and must never be added to the order's product subtotal.
+  if (verified.amount < Number(expectedAmount)) {
+    throw new PaymentReviewRequiredError(
+      "Paystack confirmed a payment below the server-calculated checkout amount.",
     );
   }
 }
@@ -447,7 +451,7 @@ export async function POST(
       // The lock + existence check + insert share one transaction, so
       // concurrent Paystack redeliveries cannot create duplicate review rows.
       await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))::text AS lock_result`;
         const existingReview = await tx.activityLog.findFirst({
           where: {
             action: "PAYMENT_REVIEW_REQUIRED",
@@ -560,10 +564,10 @@ async function handleChargeSuccess(
   const snapshotAmountKobo = Math.round(snapshotSubtotal * 100);
   if (
     !Number.isSafeInteger(snapshotAmountKobo) ||
-    snapshotAmountKobo !== data.amount ||
-    snapshotAmountKobo !== data.metadata?.expectedAmountKobo
+    snapshotAmountKobo !== Number(data.metadata?.expectedAmountKobo) ||
+    data.amount < snapshotAmountKobo
   ) {
-    throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
+    throw new PaymentReviewRequiredError("Checkout product subtotal does not match the server-calculated checkout amount or the verified payment is insufficient.");
   }
 
   const {
@@ -641,7 +645,7 @@ async function handleChargeSuccess(
     await prisma.$transaction(
       async (tx) => {
         // Serialize a payment reference across all serverless instances.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))::text AS lock_result`;
 
         const duplicate = await tx.order.findFirst({
           where: { paymentReference: data.reference },
@@ -709,9 +713,9 @@ async function handleChargeSuccess(
         }
 
         if (!Number.isSafeInteger(Math.round(subtotal * 100)) ||
-            Math.round(subtotal * 100) !== data.amount ||
-            Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo)) {
-          throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
+            Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo) ||
+            data.amount < Math.round(subtotal * 100)) {
+          throw new PaymentReviewRequiredError("Checkout product subtotal does not match the server-calculated checkout amount or the verified payment is insufficient.");
         }
 
         const customer = await findOrCreateCustomerByEmailInTransaction(
