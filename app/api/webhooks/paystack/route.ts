@@ -286,10 +286,11 @@ function getCheckoutCustomerDetails(
       : undefined;
 
   const checkoutName =
-    readString(
-      shippingAddress,
-      "fullName",
-    );
+    [
+      readString(shippingAddress, "firstName"),
+      readString(shippingAddress, "lastName"),
+    ].filter(Boolean).join(" ").trim() ||
+    readString(shippingAddress, "fullName");
 
   const checkoutPhone =
     readString(
