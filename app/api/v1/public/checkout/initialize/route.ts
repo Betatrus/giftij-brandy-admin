@@ -63,7 +63,11 @@ export async function POST(
     // collecting first and last name separately in the storefront form.
     const shippingAddress = {
       ...body.shippingAddress,
-      fullName: `${body.shippingAddress.firstName} ${body.shippingAddress.lastName}`.trim(),
+      fullName:
+        [body.shippingAddress.firstName, body.shippingAddress.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || body.shippingAddress.fullName || "",
     };
 
     /**
