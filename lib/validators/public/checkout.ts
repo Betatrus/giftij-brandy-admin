@@ -22,7 +22,8 @@ export const checkoutInitializeSchema = z.object({
   // Free-form, JSON-serializable — stored as-is on Customer.address and
   // Order.shippingAddress, same as the Paystack webhook already expects.
   shippingAddress: z.object({
-    fullName: z.string().min(1),
+    firstName: z.string().trim().min(1),
+    lastName: z.string().trim().min(1),
     phone: z.string().min(1),
     address: z.string().min(1),
     city: z.string().min(1),
