@@ -157,7 +157,8 @@ function eventFor(
         expectedAmountKobo: Math.round(unitPrice * quantity * 100),
         cart: [{ productId, quantity, unitPrice }],
         shippingAddress: {
-          fullName: "Preview Test Customer",
+          firstName: "Preview",
+        lastName: "Test Customer",
           phone: "08000000000",
           country: "Nigeria",
         },
@@ -234,18 +235,18 @@ async function main() {
     throw new Error("Preview integration tests may run only with PREVIEW_DATABASE_URL configured.");
   }
 
-  // Exact seven-minute reservation window and atomic hold/release.
+  // Exact ten-minute reservation window and atomic hold/release.
   {
     const productId = await createInventoryProduct("ttl", 5);
     const reservation = await reserveStockForCheckout([{ productId, quantity: 2 }]);
     reservationIds.push(reservation.reservationId);
     const ttl = reservation.expiresAt.getTime() - Date.now();
-    assert.ok(Math.abs(ttl - CHECKOUT_RESERVATION_TTL_MS) < 2_000, "reservation must last exactly seven minutes");
+    assert.ok(Math.abs(ttl - CHECKOUT_RESERVATION_TTL_MS) < 2_000, "reservation must last exactly ten minutes");
     assert.deepEqual(await inventoryFor(productId), { currentStock: 3, reservedStock: 2, soldStock: 0 });
     assert.equal(await releaseCheckoutReservation(reservation.reservationId), true);
     assert.equal(await releaseCheckoutReservation(reservation.reservationId), false);
     assert.deepEqual(await inventoryFor(productId), { currentStock: 5, reservedStock: 0, soldStock: 0 });
-    logPass("seven-minute reservation, hold/release, and idempotent release");
+    logPass("ten-minute reservation, hold/release, and idempotent release");
   }
 
   // A multi-line cart must roll back completely when one line is unavailable.
@@ -349,7 +350,8 @@ async function main() {
       email: customerEmail("init-failure"),
       cart: [{ productSlug: product.slug, quantity: 2 }],
       shippingAddress: {
-        fullName: "Preview Test Customer",
+        firstName: "Preview",
+        lastName: "Test Customer",
         phone: "08000000000",
         address: "1 Preview Test Road",
         city: "Lagos",
@@ -383,7 +385,8 @@ async function main() {
       email,
       cart: [{ productSlug: product.slug, quantity: 2 }],
       shippingAddress: {
-        fullName: "Preview Test Customer",
+        firstName: "Preview",
+        lastName: "Test Customer",
         phone: "08000000000",
         address: "1 Preview Test Road",
         city: "Lagos",
