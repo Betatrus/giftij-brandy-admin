@@ -59,6 +59,13 @@ export async function POST(
         await req.json(),
       );
 
+    // Preserve the existing fullName field in stored order/shipping data while
+    // collecting first and last name separately in the storefront form.
+    const shippingAddress = {
+      ...body.shippingAddress,
+      fullName: `${body.shippingAddress.firstName} ${body.shippingAddress.lastName}`.trim(),
+    };
+
     /**
      * Opportunistic cleanup.
      *
@@ -221,8 +228,7 @@ export async function POST(
                   }),
                 ),
 
-              shippingAddress:
-                body.shippingAddress,
+              shippingAddress,
             },
           }),
         },
