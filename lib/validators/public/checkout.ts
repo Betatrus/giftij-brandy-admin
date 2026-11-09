@@ -22,14 +22,20 @@ export const checkoutInitializeSchema = z.object({
   // Free-form, JSON-serializable — stored as-is on Customer.address and
   // Order.shippingAddress, same as the Paystack webhook already expects.
   shippingAddress: z.object({
-    firstName: z.string().trim().min(1),
-    lastName: z.string().trim().min(1),
+    // New storefronts send separate names; retain fullName for compatibility
+    // with older Preview clients until every preview build has rolled forward.
+    firstName: z.string().trim().min(1).optional(),
+    lastName: z.string().trim().min(1).optional(),
+    fullName: z.string().trim().min(1).optional(),
     phone: z.string().min(1),
     address: z.string().min(1),
     city: z.string().min(1),
     state: z.string().optional(),
     country: z.string().min(1),
-  }),
+  }).refine(
+    (address) => Boolean(address.fullName || (address.firstName && address.lastName)),
+    { message: "Enter your first and last name.", path: ["firstName"] },
+  ),
 });
 
 export type CheckoutInitializeInput = z.infer<typeof checkoutInitializeSchema>;
