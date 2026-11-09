@@ -17,7 +17,7 @@ import type { CartLine } from "@/lib/orders/stock";
  * Successful payment consumes the reservation.
  */
 export const CHECKOUT_RESERVATION_TTL_MS =
-  7 * 60 * 1000;
+  10 * 60 * 1000;
 
 type TxClient =
   | Prisma.TransactionClient
@@ -673,7 +673,7 @@ export async function consumeCheckoutReservation(
   }
 
   /**
-   * Enforce the seven-minute deadline even when the scheduled/opportunistic
+   * Enforce the ten-minute deadline even when the scheduled/opportunistic
    * cleanup has not run yet. A late successful payment is handled by the
    * webhook's all-or-nothing paid-order allocation fallback.
    */
