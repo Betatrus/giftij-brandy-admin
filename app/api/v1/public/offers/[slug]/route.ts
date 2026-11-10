@@ -27,7 +27,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       select: {
         id: true, title: true, slug: true, description: true, creativeImageUrl: true,
         ctaText: true, startsAt: true, endsAt: true, maxQualifyingOrders: true,
-        qualifyingOrdersCount: true, activeOfferSetId: true,
+        qualifyingOrdersCount: true, reservedQualifyingOrders: true, activeOfferSetId: true,
       },
     });
     if (!campaign || !campaign.activeOfferSetId || (campaign.maxQualifyingOrders !== null && campaign.qualifyingOrdersCount >= campaign.maxQualifyingOrders)) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
@@ -39,20 +39,20 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
           orderBy: { createdAt: "asc" },
           select: {
             discountPercent: true, freeDelivery: true, giftDescription: true,
-            product: { select: { id: true, slug: true, name: true, price: true, discount: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, altText: true } } } },
+            product: { select: { id: true, slug: true, name: true, price: true, discount: true, status: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, altText: true } } } },
           },
         },
       },
     });
     if (!offerSet || offerSet.products.length === 0) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
-    const products = offerSet.products.filter((item) => item.product).map((item) => {
+    const products = offerSet.products.filter((item) => item.product && item.product.status === "ACTIVE").map((item) => {
       const basePrice = Number(item.product.price);
       const discountPercent = item.discountPercent === null ? null : Number(item.discountPercent);
       return {
         slug: item.product.slug,
         name: item.product.name,
         basePrice,
-        offerPrice: discountPercent === null ? basePrice : computeEffectivePrice(basePrice, discountPercent),
+        offerPrice: discountPercent === null ? computeEffectivePrice(basePrice, Number(item.product.discount ?? 0)) : computeEffectivePrice(basePrice, discountPercent),
         discountPercent,
         freeDelivery: item.freeDelivery,
         giftDescription: item.giftDescription,
