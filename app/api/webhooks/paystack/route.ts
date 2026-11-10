@@ -674,7 +674,23 @@ async function handleChargeSuccess(
           );
 
         const hasReservation = reservationResult.cart.length > 0;
-        const offerSlotExpired = Boolean(reservationResult.offerCampaignId && !reservationResult.consumed);
+        let offerSlotExpired = false;
+        if (reservationResult.offerCampaignId && !reservationResult.consumed) {
+          // A payment can arrive after the ten-minute reservation expiry. Recount it
+          // only if the campaign still has a qualifying-order slot; otherwise flag it
+          // for admin review instead of silently exceeding the configured limit.
+          const lateSlotClaim = await tx.$executeRaw`
+            UPDATE "OfferCampaign"
+            SET "qualifyingOrdersCount" = "qualifyingOrdersCount" + 1,
+                "updatedAt" = NOW()
+            WHERE "id" = ${reservationResult.offerCampaignId}
+              AND (
+                "maxQualifyingOrders" IS NULL
+                OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
+              )
+          `;
+          offerSlotExpired = lateSlotClaim !== 1;
+        }
         const cartLines = hasReservation
           ? normalizeCartForComparison(reservationResult.cart)
           : normalizeCartForComparison(metadataCartLines);
