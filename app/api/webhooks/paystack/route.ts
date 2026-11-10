@@ -674,6 +674,7 @@ async function handleChargeSuccess(
           );
 
         const hasReservation = reservationResult.cart.length > 0;
+        const offerSlotExpired = Boolean(reservationResult.offerCampaignId && !reservationResult.consumed);
         const cartLines = hasReservation
           ? normalizeCartForComparison(reservationResult.cart)
           : normalizeCartForComparison(metadataCartLines);
@@ -814,6 +815,16 @@ async function handleChargeSuccess(
               },
             },
           );
+
+        if (offerSlotExpired) {
+          await tx.orderNote.create({
+            data: {
+              orderId: created.id,
+              note: "PAID - OFFER RESERVATION EXPIRED: Paystack confirmed payment after the campaign checkout slot expired or was released. Review the campaign qualifying-order limit and this order before fulfilment.",
+              createdBy: "system:paystack_webhook",
+            },
+          });
+        }
 
         if (stockUnavailable) {
           await tx.orderNote.create({
