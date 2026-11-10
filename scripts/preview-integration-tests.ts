@@ -29,6 +29,8 @@ const paymentReferences: string[] = [];
 const customerEmails: string[] = [];
 const blogCategoryIds: string[] = [];
 const blogPostIds: string[] = [];
+let storeSettingsSnapshotCaptured = false;
+let originalStoreSettings: { customerCareWhatsApp: string | null; blogNavigationVisible: boolean; blogIndexingEnabled: boolean } | null = null;
 const mockVerifications = new Map<string, { amount: number; currency: string }>();
 const initializeResponses: Array<Record<string, unknown>> = [];
 let lastInitializeBody: Record<string, any> | null = null;
@@ -439,6 +441,15 @@ async function main() {
   {
     const storefrontSecret = process.env.STOREFRONT_API_SECRET?.trim();
     if (!storefrontSecret) throw new Error("STOREFRONT_API_SECRET is required for Preview blog API tests.");
+    // Snapshot the existing singleton before changing blog test switches.
+    // Cleanup restores it exactly; tests must never delete real Preview settings.
+    const existingStoreSettings = await prisma.storeSettings.findUnique({ where: { id: "singleton" } });
+    originalStoreSettings = existingStoreSettings ? {
+      customerCareWhatsApp: existingStoreSettings.customerCareWhatsApp,
+      blogNavigationVisible: existingStoreSettings.blogNavigationVisible,
+      blogIndexingEnabled: existingStoreSettings.blogIndexingEnabled,
+    } : null;
+    storeSettingsSnapshotCaptured = true;
     await prisma.storeSettings.upsert({
       where: { id: "singleton" },
       create: { id: "singleton", blogNavigationVisible: true, blogIndexingEnabled: false },
@@ -685,7 +696,17 @@ async function cleanup() {
   if (blogCategoryIds.length) {
     await prisma.blogCategory.deleteMany({ where: { id: { in: blogCategoryIds } } });
   }
-  await prisma.storeSettings.deleteMany({ where: { id: "singleton" } });
+  // Restore the pre-test singleton state instead of deleting application settings.
+  if (storeSettingsSnapshotCaptured) {
+    if (originalStoreSettings) {
+      await prisma.storeSettings.update({
+        where: { id: "singleton" },
+        data: originalStoreSettings,
+      });
+    } else {
+      await prisma.storeSettings.deleteMany({ where: { id: "singleton" } });
+    }
+  }
   const orders = await prisma.order.findMany({
     where: { paymentReference: { in: paymentReferences } },
     select: { id: true, customerId: true },
