@@ -19,12 +19,9 @@ export async function resolveCartLines(
 ): Promise<ResolvedCartLine[]> {
   const slugs = [...new Set(cart.map((line) => line.productSlug))];
   const offerSlugs = [...new Set(cart.map((line) => line.offerCampaignSlug).filter((value): value is string => Boolean(value)))];
-  const requestedSetIds = [...new Set(cart.filter((line) => line.offerCampaignSlug).map((line) => line.offerSetId).filter((value): value is string => Boolean(value)))];
+
   if (cart.some((line) => line.offerSetId && !line.offerCampaignSlug)) {
     throw new ApiError("VALIDATION_ERROR", "An Offer Set can only be used with its Offer Campaign.");
-  }
-  if (requestedSetIds.length > 1) {
-    throw new ApiError("VALIDATION_ERROR", "A checkout can contain products from only one Offer Set at a time.");
   }
   if (offerSlugs.length > 1) {
     throw new ApiError("VALIDATION_ERROR", "A checkout can contain products from only one Offer Campaign at a time.");
@@ -40,8 +37,8 @@ export async function resolveCartLines(
   const productBySlug = new Map(products.map((product) => [product.slug, product]));
 
   let campaignId: string | null = null;
-  let offerRuleByProduct = new Map<string, { discountPercent: number | null }>();
-  let selectedOfferSetId: string | null = null;
+  let defaultOfferSetId: string | null = null;
+  let offerRuleBySetAndProduct = new Map<string, { discountPercent: number | null }>();
   if (offerSlugs.length === 1) {
     const now = new Date();
     const campaign = await prisma.offerCampaign.findFirst({
@@ -64,17 +61,25 @@ export async function resolveCartLines(
     )) {
       throw new ApiError("OFFER_UNAVAILABLE", "This offer has ended or is no longer available. Please refresh the campaign page.");
     }
-    selectedOfferSetId = requestedSetIds[0] ?? campaign.activeOfferSetId;
-    const activeSet = await prisma.offerSet.findFirst({
-      where: { id: selectedOfferSetId, campaignId: campaign.id, isEnabled: true },
+    defaultOfferSetId = campaign.activeOfferSetId;
+    const selectedSetIds = [...new Set(
+      cart.filter((line) => line.offerCampaignSlug).map((line) => line.offerSetId ?? defaultOfferSetId),
+    )].filter((id): id is string => Boolean(id));
+    const activeSets = await prisma.offerSet.findMany({
+      where: { id: { in: selectedSetIds }, campaignId: campaign.id, isEnabled: true },
       select: { id: true },
     });
-    if (!activeSet) throw new ApiError("OFFER_UNAVAILABLE", "This offer is no longer available.");
+    if (activeSets.length !== selectedSetIds.length) {
+      throw new ApiError("OFFER_UNAVAILABLE", "One of the selected Offer Sets is no longer available.");
+    }
     const rules = await prisma.offerSetProduct.findMany({
-      where: { offerSetId: activeSet.id, productId: { in: products.map((product) => product.id) } },
-      select: { productId: true, discountPercent: true },
+      where: {
+        offerSetId: { in: selectedSetIds },
+        productId: { in: products.map((product) => product.id) },
+      },
+      select: { offerSetId: true, productId: true, discountPercent: true },
     });
-    offerRuleByProduct = new Map(rules.map((rule) => [rule.productId, {
+    offerRuleBySetAndProduct = new Map(rules.map((rule) => [`${rule.offerSetId}:${rule.productId}`, {
       discountPercent: rule.discountPercent === null ? null : Number(rule.discountPercent),
     }]));
     campaignId = campaign.id;
@@ -86,7 +91,8 @@ export async function resolveCartLines(
 
     let discountPercent = product.discount ? Number(product.discount) : 0;
     if (line.offerCampaignSlug) {
-      const rule = offerRuleByProduct.get(product.id);
+      const lineOfferSetId = line.offerSetId ?? defaultOfferSetId;
+      const rule = lineOfferSetId ? offerRuleBySetAndProduct.get(`${lineOfferSetId}:${product.id}`) : undefined;
       if (!rule) throw new ApiError("OFFER_UNAVAILABLE", `"${product.name}" is not included in the currently selected Offer Set.`);
       if (rule.discountPercent !== null) discountPercent = rule.discountPercent;
     }
@@ -97,7 +103,7 @@ export async function resolveCartLines(
       if (!variant || variant.status === "ARCHIVED") {
         throw new ApiError("NOT_FOUND", `The selected option for "${product.name}" is no longer available.`);
       }
-      return { productId: product.id, variantId: variant.id, quantity: line.quantity, unitPrice, name: product.name, offerCampaignId: line.offerCampaignSlug ? campaignId : null, offerSetId: line.offerCampaignSlug ? selectedOfferSetId : null };
+      return { productId: product.id, variantId: variant.id, quantity: line.quantity, unitPrice, name: product.name, offerCampaignId: line.offerCampaignSlug ? campaignId : null, offerSetId: line.offerCampaignSlug ? (line.offerSetId ?? defaultOfferSetId) : null };
     }
 
     if (product.variants.length > 0) {
