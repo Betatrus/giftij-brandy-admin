@@ -49,9 +49,3 @@ CREATE INDEX "OfferSetProduct_productId_idx" ON "OfferSetProduct"("productId");
 ALTER TABLE "OfferSet" ADD CONSTRAINT "OfferSet_campaignId_fkey" FOREIGN KEY ("campaignId") REFERENCES "OfferCampaign"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "OfferSetProduct" ADD CONSTRAINT "OfferSetProduct_offerSetId_fkey" FOREIGN KEY ("offerSetId") REFERENCES "OfferSet"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "OfferSetProduct" ADD CONSTRAINT "OfferSetProduct_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-
--- Campaign order slots are reserved atomically while the customer's checkout is active.
-ALTER TABLE "OfferCampaign" ADD COLUMN "reservedQualifyingOrders" INTEGER NOT NULL DEFAULT 0;
-ALTER TABLE "CheckoutReservation" ADD COLUMN "offerCampaignId" TEXT;
-CREATE INDEX "CheckoutReservation_offerCampaignId_idx" ON "CheckoutReservation"("offerCampaignId");
-ALTER TABLE "CheckoutReservation" ADD CONSTRAINT "CheckoutReservation_offerCampaignId_fkey" FOREIGN KEY ("offerCampaignId") REFERENCES "OfferCampaign"("id") ON DELETE SET NULL ON UPDATE CASCADE;
