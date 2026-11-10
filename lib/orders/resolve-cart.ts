@@ -109,6 +109,6 @@ export async function resolveCartLines(
     if (product.variants.length > 0) {
       throw new ApiError("VALIDATION_ERROR", `"${product.name}" requires a selected option (colour/size).`);
     }
-    return { productId: product.id, variantId: null, quantity: line.quantity, unitPrice, name: product.name, offerCampaignId: line.offerCampaignSlug ? campaignId : null, offerSetId: line.offerCampaignSlug ? selectedOfferSetId : null };
+    return { productId: product.id, variantId: null, quantity: line.quantity, unitPrice, name: product.name, offerCampaignId: line.offerCampaignSlug ? campaignId : null, offerSetId: line.offerCampaignSlug ? (line.offerSetId ?? defaultOfferSetId) : null };
   });
 }
