@@ -10,14 +10,22 @@ export interface ResolvedCartLine extends CartLine {
   unitPrice: number;
   name: string;
   offerCampaignId: string | null;
+  offerSetId: string | null;
 }
 
 /** Resolve all product, variant, campaign and price data from the database. */
 export async function resolveCartLines(
-  cart: { productSlug: string; sku?: string; quantity: number; offerCampaignSlug?: string }[],
+  cart: { productSlug: string; sku?: string; quantity: number; offerCampaignSlug?: string; offerSetId?: string }[],
 ): Promise<ResolvedCartLine[]> {
   const slugs = [...new Set(cart.map((line) => line.productSlug))];
   const offerSlugs = [...new Set(cart.map((line) => line.offerCampaignSlug).filter((value): value is string => Boolean(value)))];
+  const requestedSetIds = [...new Set(cart.filter((line) => line.offerCampaignSlug).map((line) => line.offerSetId).filter((value): value is string => Boolean(value)))];
+  if (cart.some((line) => line.offerSetId && !line.offerCampaignSlug)) {
+    throw new ApiError("VALIDATION_ERROR", "An Offer Set can only be used with its Offer Campaign.");
+  }
+  if (requestedSetIds.length > 1) {
+    throw new ApiError("VALIDATION_ERROR", "A checkout can contain products from only one Offer Set at a time.");
+  }
   if (offerSlugs.length > 1) {
     throw new ApiError("VALIDATION_ERROR", "A checkout can contain products from only one Offer Campaign at a time.");
   }
@@ -33,6 +41,7 @@ export async function resolveCartLines(
 
   let campaignId: string | null = null;
   let offerRuleByProduct = new Map<string, { discountPercent: number | null }>();
+  let selectedOfferSetId: string | null = null;
   if (offerSlugs.length === 1) {
     const now = new Date();
     const campaign = await prisma.offerCampaign.findFirst({
@@ -55,8 +64,9 @@ export async function resolveCartLines(
     )) {
       throw new ApiError("OFFER_UNAVAILABLE", "This offer has ended or is no longer available. Please refresh the campaign page.");
     }
+    selectedOfferSetId = requestedSetIds[0] ?? campaign.activeOfferSetId;
     const activeSet = await prisma.offerSet.findFirst({
-      where: { id: campaign.activeOfferSetId, campaignId: campaign.id, isEnabled: true },
+      where: { id: selectedOfferSetId, campaignId: campaign.id, isEnabled: true },
       select: { id: true },
     });
     if (!activeSet) throw new ApiError("OFFER_UNAVAILABLE", "This offer is no longer available.");
@@ -87,7 +97,7 @@ export async function resolveCartLines(
       if (!variant || variant.status === "ARCHIVED") {
         throw new ApiError("NOT_FOUND", `The selected option for "${product.name}" is no longer available.`);
       }
-      return { productId: product.id, variantId: variant.id, quantity: line.quantity, unitPrice, name: product.name, offerCampaignId: line.offerCampaignSlug ? campaignId : null };
+      return { productId: product.id, variantId: variant.id, quantity: line.quantity, unitPrice, name: product.name, offerCampaignId: line.offerCampaignSlug ? campaignId : null, offerSetId: line.offerCampaignSlug ? selectedOfferSetId : null };
     }
 
     if (product.variants.length > 0) {
