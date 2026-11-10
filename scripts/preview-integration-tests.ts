@@ -717,8 +717,6 @@ async function cleanup() {
   });
   const resources = [
     ...paymentReferences.map((reference) => `PaystackReference:${reference}`),
-    "PaystackEvent:charge.success",
-    "PaystackEvent:charge.failed",
     ...orders.map((order) => `Order:${order.id}`),
     ...customers.map((customer) => `Customer:${customer.id}`),
   ];
