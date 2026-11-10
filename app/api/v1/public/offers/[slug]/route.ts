@@ -84,6 +84,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         startsAt: campaign.startsAt, endsAt: campaign.endsAt,
         maxQualifyingOrders: campaign.maxQualifyingOrders,
         qualifyingOrdersCount: campaign.qualifyingOrdersCount,
+        defaultOfferSetId: campaign.activeOfferSetId,
       },
       offerSets: availableSets,
       offerSet: { id: offerSet.id, title: offerSet.title, description: offerSet.description },
