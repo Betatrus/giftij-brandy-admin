@@ -15,7 +15,8 @@
     "prisma:backfill-batch1": "tsx prisma/backfill-batch1.ts",
     "prisma:backfill-variant-color-size": "tsx prisma/backfill-variant-color-size.ts",
     "prisma:seed-categories": "tsx prisma/seed-categories.ts",
-    "prisma:migrate-categories": "tsx prisma/migrate-categories-to-bags-shoes-slippers.ts"
+    "prisma:migrate-categories": "tsx prisma/migrate-categories-to-bags-shoes-slippers.ts",
+    "prisma:seed-preview-admin": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
