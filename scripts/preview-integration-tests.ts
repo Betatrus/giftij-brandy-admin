@@ -20,6 +20,7 @@ import { GET as reservationCron } from "../app/api/cron/expire-checkout-reservat
 import { GET as publicBlog } from "../app/api/v1/public/blog/route";
 import { GET as publicBlogPost } from "../app/api/v1/public/blog/[slug]/route";
 import { GET as publicBlogSettings } from "../app/api/v1/public/blog-settings/route";
+import { GET as publicOffer } from "../app/api/v1/public/offers/[slug]/route";
 
 const TEST_PAYSTACK_SECRET = "giftij-preview-only-mocked-paystack-secret";
 process.env.PAYSTACK_SECRET_KEY = TEST_PAYSTACK_SECRET;
@@ -354,6 +355,24 @@ async function main() {
       where: { id: campaign.id },
       data: { activeOfferSetId: offerSet.id },
     });
+
+    const storefrontSecret = process.env.STOREFRONT_API_SECRET?.trim();
+    if (!storefrontSecret) throw new Error("STOREFRONT_API_SECRET is required for Preview offer API tests.");
+    const offerResponse = await publicOffer(
+      new NextRequest(`https://admin-preview.invalid/api/v1/public/offers/preview-offer-${suffix}`, {
+        headers: {
+          "X-Storefront-Key": storefrontSecret,
+          origin: "https://giftij-brandy-frontend-git-stag-eeeb0a-betatrus-team-s-projects.vercel.app",
+        },
+      }),
+      { params: Promise.resolve({ slug: `preview-offer-${suffix}` }) },
+    );
+    assert.equal(offerResponse.status, 200);
+    const offerPayload = await offerResponse.json() as { success: boolean; data: { offerSet: { title: string }; products: Array<{ slug: string; offerPrice: number }> } };
+    assert.equal(offerPayload.success, true);
+    assert.equal(offerPayload.data.offerSet.title, "Preview First Order Offer");
+    assert.equal(offerPayload.data.products.length, 1);
+    assert.equal(offerPayload.data.products[0]?.offerPrice, 75);
 
     const resolved = await resolveCartLines([{
       productSlug: product.slug,
