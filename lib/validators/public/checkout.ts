@@ -13,6 +13,7 @@ export const checkoutCartLineSchema = z.object({
   // Present for variant products (colour and/or colour+size), absent for
   // simple non-variant products.
   sku: z.string().min(1).optional(),
+  offerCampaignSlug: z.string().min(1).max(90).optional(),
   quantity: z.coerce.number().int().min(1).max(50),
 });
 
