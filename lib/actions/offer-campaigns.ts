@@ -141,3 +141,29 @@ export async function updateOfferCampaign(formData: FormData) {
   revalidatePath("/admin/marketing");
   return { ok: true, id: campaign.id };
 }
+
+export async function updateOfferSet(formData: FormData) {
+  const session = await requireMarketingAccess();
+  const id = clean(formData.get("offerSetId"), "Offer Set", 80);
+  const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
+  const title = clean(formData.get("title"), "Offer Set title", 100);
+  const productIds = Array.from(new Set(formData.getAll("productIds").map(String).filter(Boolean)));
+  if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
+  const existing = await prisma.offerSet.findFirst({ where: { id, campaignId }, select: { id: true } });
+  if (!existing) throw new Error("Offer Set not found for this campaign.");
+  const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true } });
+  if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
+  const discountRaw = String(formData.get("discountPercent") ?? "").trim();
+  const discountPercent = discountRaw ? Number(discountRaw) : null;
+  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)) throw new Error("Discount must be greater than 0 and no more than 100 percent.");
+  const freeDelivery = formData.get("freeDelivery") === "on";
+  const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
+  if (discountPercent === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit: discount, free delivery, or gift.");
+  await prisma.$transaction(async (tx) => {
+    await tx.offerSet.update({ where: { id }, data: { title, description: String(formData.get("description") ?? "").trim() || null } });
+    await tx.offerSetProduct.deleteMany({ where: { offerSetId: id } });
+    await tx.offerSetProduct.createMany({ data: productIds.map((productId) => ({ offerSetId: id, productId, discountPercent, freeDelivery, giftDescription })) });
+  });
+  await logActivity({ userId: session.user.id, action: "OFFER_SET_UPDATED", resource: `OfferSet:${id}`, metadata: { campaignId, title, productCount: productIds.length } });
+  revalidatePath("/admin/marketing");
+}
