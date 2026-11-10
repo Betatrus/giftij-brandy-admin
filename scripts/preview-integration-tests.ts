@@ -351,6 +351,15 @@ async function main() {
       },
       select: { id: true },
     });
+    const alternateOfferSet = await prisma.offerSet.create({
+      data: {
+        campaignId: campaign.id,
+        title: "Preview Alternate Offer",
+        products: { create: { productId, discountPercent: 10 } },
+        sortOrder: 1,
+      },
+      select: { id: true },
+    });
     await prisma.offerCampaign.update({
       where: { id: campaign.id },
       data: { activeOfferSetId: offerSet.id },
@@ -368,11 +377,35 @@ async function main() {
       { params: Promise.resolve({ slug: `preview-offer-${suffix}` }) },
     );
     assert.equal(offerResponse.status, 200);
-    const offerPayload = await offerResponse.json() as { success: boolean; data: { offerSet: { title: string }; products: Array<{ slug: string; offerPrice: number }> } };
+    const offerPayload = await offerResponse.json() as { success: boolean; data: { offerSets: Array<{ id: string; title: string }>; offerSet: { id: string; title: string }; products: Array<{ slug: string; offerPrice: number }> } };
     assert.equal(offerPayload.success, true);
     assert.equal(offerPayload.data.offerSet.title, "Preview First Order Offer");
+    assert.equal(offerPayload.data.offerSets.length, 2);
     assert.equal(offerPayload.data.products.length, 1);
     assert.equal(offerPayload.data.products[0]?.offerPrice, 75);
+
+    const alternateResponse = await publicOffer(
+      new NextRequest(`https://admin-preview.invalid/api/v1/public/offers/preview-offer-${suffix}?set=${alternateOfferSet.id}`, {
+        headers: {
+          "X-Storefront-Key": storefrontSecret,
+          origin: "https://giftij-brandy-frontend-git-stag-eeeb0a-betatrus-team-s-projects.vercel.app",
+        },
+      }),
+      { params: Promise.resolve({ slug: `preview-offer-${suffix}` }) },
+    );
+    assert.equal(alternateResponse.status, 200);
+    const alternatePayload = await alternateResponse.json() as { success: boolean; data: { offerSet: { id: string; title: string }; products: Array<{ offerPrice: number }> } };
+    assert.equal(alternatePayload.data.offerSet.id, alternateOfferSet.id);
+    assert.equal(alternatePayload.data.offerSet.title, "Preview Alternate Offer");
+    assert.equal(alternatePayload.data.products[0]?.offerPrice, 90);
+    const alternateResolved = await resolveCartLines([{
+      productSlug: product.slug,
+      quantity: 1,
+      offerCampaignSlug: `preview-offer-${suffix}`,
+      offerSetId: alternateOfferSet.id,
+    }]);
+    assert.equal(alternateResolved[0]?.unitPrice, 90);
+    assert.equal(alternateResolved[0]?.offerSetId, alternateOfferSet.id);
 
     const resolved = await resolveCartLines([{
       productSlug: product.slug,
