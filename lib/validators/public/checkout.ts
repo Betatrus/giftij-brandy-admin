@@ -14,6 +14,7 @@ export const checkoutCartLineSchema = z.object({
   // simple non-variant products.
   sku: z.string().min(1).optional(),
   offerCampaignSlug: z.string().min(1).max(90).optional(),
+  offerSetId: z.string().min(1).max(80).optional(),
   quantity: z.coerce.number().int().min(1).max(50),
 });
 
