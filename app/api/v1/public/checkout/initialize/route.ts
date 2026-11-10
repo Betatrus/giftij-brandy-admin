@@ -235,6 +235,7 @@ export async function POST(
                     // Immutable server-resolved unit price for order reconciliation.
                     unitPrice: line.unitPrice,
                     offerCampaignId: line.offerCampaignId,
+                    offerSetId: line.offerSetId,
                   }),
                 ),
 
