@@ -25,7 +25,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         ],
       },
       select: {
-        id: true, title: true, slug: true, description: true, creativeImageUrl: true,
+        id: true, title: true, slug: true, description: true, announcementHtml: true, creativeImageUrl: true,
         ctaText: true, startsAt: true, endsAt: true, maxQualifyingOrders: true,
         qualifyingOrdersCount: true, reservedQualifyingOrders: true, activeOfferSetId: true,
       },
@@ -79,6 +79,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     return withCors(ok({
       campaign: {
         title: campaign.title, slug: campaign.slug, description: campaign.description,
+        announcementHtml: campaign.announcementHtml,
         creativeImageUrl: campaign.creativeImageUrl, ctaText: campaign.ctaText,
         startsAt: campaign.startsAt, endsAt: campaign.endsAt,
         maxQualifyingOrders: campaign.maxQualifyingOrders,
