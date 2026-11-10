@@ -30,9 +30,24 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         qualifyingOrdersCount: true, reservedQualifyingOrders: true, activeOfferSetId: true,
       },
     });
-    if (!campaign || !campaign.activeOfferSetId || (campaign.maxQualifyingOrders !== null && campaign.qualifyingOrdersCount >= campaign.maxQualifyingOrders)) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+    if (!campaign || !campaign.activeOfferSetId || (
+      campaign.maxQualifyingOrders !== null &&
+      campaign.qualifyingOrdersCount + campaign.reservedQualifyingOrders >= campaign.maxQualifyingOrders
+    )) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+
+    const availableSets = await prisma.offerSet.findMany({
+      where: { campaignId: campaign.id, isEnabled: true },
+      orderBy: { sortOrder: "asc" },
+      select: { id: true, title: true, description: true },
+    });
+    const requestedSetId = req.nextUrl.searchParams.get("set");
+    const selectedSetId = requestedSetId ?? campaign.activeOfferSetId;
+    if (!availableSets.some((set) => set.id === selectedSetId)) {
+      throw new ApiError("NOT_FOUND", "That Offer Set is not available in this campaign.");
+    }
+
     const offerSet = await prisma.offerSet.findFirst({
-      where: { id: campaign.activeOfferSetId, campaignId: campaign.id, isEnabled: true },
+      where: { id: selectedSetId, campaignId: campaign.id, isEnabled: true },
       select: {
         id: true, title: true, description: true,
         products: {
@@ -44,7 +59,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         },
       },
     });
-    if (!offerSet || offerSet.products.length === 0) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+    if (!offerSet) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
     const products = offerSet.products.filter((item) => item.product && item.product.status === "ACTIVE").map((item) => {
       const basePrice = Number(item.product.price);
       const discountPercent = item.discountPercent === null ? null : Number(item.discountPercent);
@@ -60,6 +75,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         imageAlt: item.product.images[0]?.altText ?? item.product.name,
       };
     });
+    if (products.length === 0) throw new ApiError("NOT_FOUND", "This Offer Set has no available products.");
     return withCors(ok({
       campaign: {
         title: campaign.title, slug: campaign.slug, description: campaign.description,
@@ -68,7 +84,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         maxQualifyingOrders: campaign.maxQualifyingOrders,
         qualifyingOrdersCount: campaign.qualifyingOrdersCount,
       },
-      offerSet: { title: offerSet.title, description: offerSet.description },
+      offerSets: availableSets,
+      offerSet: { id: offerSet.id, title: offerSet.title, description: offerSet.description },
       products,
     }), origin);
   } catch (error) {
