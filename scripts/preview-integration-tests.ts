@@ -328,6 +328,11 @@ async function main() {
       where: { id: productId },
       select: { slug: true },
     });
+    const alternateProductId = await createInventoryProduct("offer-campaign-alternate", 4);
+    const alternateProduct = await prisma.product.findUniqueOrThrow({
+      where: { id: alternateProductId },
+      select: { slug: true },
+    });
     const campaign = await prisma.offerCampaign.create({
       data: {
         title: "Preview Offer Campaign",
@@ -355,7 +360,7 @@ async function main() {
       data: {
         campaignId: campaign.id,
         title: "Preview Alternate Offer",
-        products: { create: { productId, discountPercent: 10 } },
+        products: { create: { productId: alternateProductId, discountPercent: 10 } },
         sortOrder: 1,
       },
       select: { id: true },
@@ -399,13 +404,20 @@ async function main() {
     assert.equal(alternatePayload.data.offerSet.title, "Preview Alternate Offer");
     assert.equal(alternatePayload.data.products[0]?.offerPrice, 90);
     const alternateResolved = await resolveCartLines([{
-      productSlug: product.slug,
+      productSlug: alternateProduct.slug,
       quantity: 1,
       offerCampaignSlug: `preview-offer-${suffix}`,
       offerSetId: alternateOfferSet.id,
     }]);
     assert.equal(alternateResolved[0]?.unitPrice, 90);
     assert.equal(alternateResolved[0]?.offerSetId, alternateOfferSet.id);
+
+    const multiSetCart = await resolveCartLines([
+      { productSlug: product.slug, quantity: 1, offerCampaignSlug: `preview-offer-${suffix}`, offerSetId: offerSet.id },
+      { productSlug: alternateProduct.slug, quantity: 1, offerCampaignSlug: `preview-offer-${suffix}`, offerSetId: alternateOfferSet.id },
+    ]);
+    assert.deepEqual(multiSetCart.map((line) => line.unitPrice), [75, 90]);
+    assert.deepEqual(multiSetCart.map((line) => line.offerSetId), [offerSet.id, alternateOfferSet.id]);
 
     const resolved = await resolveCartLines([{
       productSlug: product.slug,
