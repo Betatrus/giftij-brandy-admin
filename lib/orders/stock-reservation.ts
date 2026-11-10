@@ -499,14 +499,6 @@ export async function releaseCheckoutReservation(
         return false;
       }
 
-      if (reservation.offerCampaignId) {
-        const slotReleased = await tx.offerCampaign.updateMany({
-          where: { id: reservation.offerCampaignId, reservedQualifyingOrders: { gt: 0 } },
-          data: { reservedQualifyingOrders: { decrement: 1 } },
-        });
-        if (slotReleased.count !== 1) throw new Error("Unable to release expired campaign order slot.");
-      }
-
       const lines =
         parseReservationCart(
           reservation.cart,
@@ -713,6 +705,7 @@ export async function consumeCheckoutReservation(
       cart:
         lines,
       reservationId: reservation.id,
+      offerCampaignId: reservation.offerCampaignId,
     };
   }
 
@@ -779,6 +772,7 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart: lines,
       reservationId: reservation.id,
+      offerCampaignId: reservation.offerCampaignId,
     };
   }
 
@@ -809,6 +803,7 @@ export async function consumeCheckoutReservation(
       cart:
         lines,
       reservationId: reservation.id,
+      offerCampaignId: reservation.offerCampaignId,
     };
   }
 
@@ -1087,6 +1082,14 @@ async function expireCheckoutReservation(
 
       if (claimed.count !== 1) {
         return false;
+      }
+
+      if (reservation.offerCampaignId) {
+        const slotReleased = await tx.offerCampaign.updateMany({
+          where: { id: reservation.offerCampaignId, reservedQualifyingOrders: { gt: 0 } },
+          data: { reservedQualifyingOrders: { decrement: 1 } },
+        });
+        if (slotReleased.count !== 1) throw new Error("Unable to release expired campaign order slot.");
       }
 
       const lines =
