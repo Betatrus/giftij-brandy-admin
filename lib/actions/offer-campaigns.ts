@@ -113,7 +113,6 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   if (!campaign) throw new Error("Campaign not found.");
   if (status === "PUBLISHED" && !campaign.offerSets.length) throw new Error("Add at least one enabled Offer Set before publishing.");
   if (status === "PUBLISHED" && !campaign.activeOfferSetId) throw new Error("Choose the Offer Set customers should see before publishing.");
-  if (status === "PUBLISHED" && !campaign.activeOfferSetId) throw new Error("Choose the Offer Set customers should see before publishing.");
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
   revalidatePath("/admin/marketing");
