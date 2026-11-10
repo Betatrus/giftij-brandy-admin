@@ -37,6 +37,8 @@ function optionalDate(value: FormDataEntryValue | null, label: string) {
 export async function createOfferCampaign(formData: FormData) {
   const session = await requireMarketingAccess();
   const title = clean(formData.get("title"), "Campaign title", 120);
+  const announcementHtml = String(formData.get("announcementHtml") ?? "").trim();
+  if (announcementHtml.length > 20000) throw new Error("Announcement HTML must be 20,000 characters or fewer.");
   const slug = slugify(String(formData.get("slug") || title));
   if (!slug) throw new Error("A valid campaign URL slug is required.");
   const existing = await prisma.offerCampaign.findUnique({ where: { slug }, select: { id: true } });
@@ -52,6 +54,7 @@ export async function createOfferCampaign(formData: FormData) {
   const campaign = await prisma.offerCampaign.create({ data: {
     title, slug,
     description: String(formData.get("description") ?? "").trim() || null,
+    announcementHtml: announcementHtml || null,
     creativeImageUrl: String(formData.get("creativeImageUrl") ?? "").trim() || null,
     ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
     startsAt, endsAt, maxQualifyingOrders,
@@ -120,6 +123,8 @@ export async function updateOfferCampaign(formData: FormData) {
   const session = await requireMarketingAccess();
   const id = clean(formData.get("campaignId"), "Campaign", 80);
   const title = clean(formData.get("title"), "Campaign title", 120);
+  const announcementHtml = String(formData.get("announcementHtml") ?? "").trim();
+  if (announcementHtml.length > 20000) throw new Error("Announcement HTML must be 20,000 characters or fewer.");
   const slug = slugify(String(formData.get("slug") || title));
   if (!slug) throw new Error("A valid campaign URL slug is required.");
   const duplicate = await prisma.offerCampaign.findFirst({ where: { slug, id: { not: id } }, select: { id: true } });
@@ -132,6 +137,7 @@ export async function updateOfferCampaign(formData: FormData) {
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
   await prisma.offerCampaign.update({ where: { id }, data: {
     title, slug, description: String(formData.get("description") ?? "").trim() || null,
+    announcementHtml: announcementHtml || null,
     creativeImageUrl: String(formData.get("creativeImageUrl") ?? "").trim() || null,
     ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
     startsAt, endsAt, maxQualifyingOrders,
