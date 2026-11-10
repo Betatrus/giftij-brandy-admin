@@ -12,11 +12,33 @@ export default async function MarketingPage() {
   const session = await auth();
   if (!session?.user) redirect("/login");
   const canManageOffers = ["SUPER_ADMIN", "TECHNICAL_SUPPORT"].includes(session.user.role);
-  const [campaigns, products, blogCount] = await Promise.all([
-    canManageOffers ? prisma.offerCampaign.findMany({ orderBy: { updatedAt: "desc" }, include: { offerSets: { orderBy: { sortOrder: "asc" }, include: { products: { include: { product: { select: { id: true, name: true, price: true, slug: true } } } } } } }) : Promise.resolve([]),
-    canManageOffers ? prisma.product.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true, price: true, currency: true } }) : Promise.resolve([]),
-    prisma.blogPost.count(),
-  ]);
+  const campaigns = canManageOffers
+    ? await prisma.offerCampaign.findMany({
+        orderBy: { updatedAt: "desc" },
+        include: {
+          offerSets: {
+            orderBy: { sortOrder: "asc" },
+            include: {
+              products: {
+                include: {
+                  product: {
+                    select: { id: true, name: true, price: true, slug: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      })
+    : [];
+  const products = canManageOffers
+    ? await prisma.product.findMany({
+        where: { status: "ACTIVE" },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, price: true, currency: true },
+      })
+    : [];
+  const blogCount = await prisma.blogPost.count();
   return <div>
     <Breadcrumbs items={[{ label: "Home", href: "/admin/dashboard" }, { label: "Marketing" }]} />
     <div className="mb-7"><h1 className="font-display text-2xl text-ink">Marketing</h1><p className="mt-1 text-sm text-ink/50">Manage editorial content and customer-facing promotions from one place.</p></div>
