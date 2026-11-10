@@ -119,9 +119,12 @@ export async function POST(
      * Only requests that successfully reserve inventory continue.
      */
     try {
+      const campaignIds = [...new Set(resolved.map((line) => line.offerCampaignId).filter((id): id is string => Boolean(id)))];
+      if (campaignIds.length > 1) throw new ApiError("VALIDATION_ERROR", "A checkout can use only one Offer Campaign at a time.");
       const reservation =
         await reserveStockForCheckout(
           resolved,
+          campaignIds[0] ?? null,
         );
 
       reservationId =
@@ -211,6 +214,7 @@ export async function POST(
 
             metadata: {
               reservationId,
+              offerCampaignId: resolved.find((line) => line.offerCampaignId)?.offerCampaignId ?? null,
 
               // Server-calculated amount in kobo; webhook uses this for verification.
               expectedAmountKobo: amountKobo,
@@ -229,6 +233,7 @@ export async function POST(
 
                     // Immutable server-resolved unit price for order reconciliation.
                     unitPrice: line.unitPrice,
+                    offerCampaignId: line.offerCampaignId,
                   }),
                 ),
 
