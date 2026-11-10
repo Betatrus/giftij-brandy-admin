@@ -22,7 +22,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         AND: [
           { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
           { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
-          { OR: [{ maxQualifyingOrders: null }, { qualifyingOrdersCount: { lt: prisma.offerCampaign.fields.maxQualifyingOrders } }] },
         ],
       },
       select: {
@@ -31,7 +30,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         qualifyingOrdersCount: true, activeOfferSetId: true,
       },
     });
-    if (!campaign || !campaign.activeOfferSetId) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+    if (!campaign || !campaign.activeOfferSetId || (campaign.maxQualifyingOrders !== null && campaign.qualifyingOrdersCount >= campaign.maxQualifyingOrders)) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
     const offerSet = await prisma.offerSet.findFirst({
       where: { id: campaign.activeOfferSetId, campaignId: campaign.id, isEnabled: true },
       select: {
