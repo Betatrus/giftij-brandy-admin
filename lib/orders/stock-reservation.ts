@@ -290,6 +290,7 @@ async function reserveLine(
  */
 export async function reserveStockForCheckout(
   lines: CartLine[],
+  offerCampaignId: string | null = null,
 ): Promise<{
   reservationId: string;
   expiresAt: Date;
@@ -342,6 +343,27 @@ export async function reserveStockForCheckout(
         }
       }
 
+      if (offerCampaignId) {
+        // One qualifying-order slot is claimed atomically with the stock reservation.
+        // PostgreSQL serializes concurrent checkouts against this campaign row.
+        const slotClaimed = await tx.$executeRaw`
+          UPDATE "OfferCampaign"
+          SET "reservedQualifyingOrders" = "reservedQualifyingOrders" + 1,
+              "updatedAt" = NOW()
+          WHERE "id" = ${offerCampaignId}
+            AND "status" = 'PUBLISHED'
+            AND ("startsAt" IS NULL OR "startsAt" <= NOW())
+            AND ("endsAt" IS NULL OR "endsAt" > NOW())
+            AND (
+              "maxQualifyingOrders" IS NULL
+              OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
+            )
+        `;
+        if (slotClaimed !== 1) {
+          throw new Error("OFFER_UNAVAILABLE: This campaign has reached its qualifying-order limit or is no longer active.");
+        }
+      }
+
       const reservation =
         await tx.checkoutReservation.create(
           {
@@ -352,6 +374,7 @@ export async function reserveStockForCheckout(
               cart:
                 normalized as Prisma.InputJsonValue,
 
+              offerCampaignId,
               expiresAt,
             },
 
@@ -432,6 +455,7 @@ export async function releaseCheckoutReservation(
               id: true,
               status: true,
               cart: true,
+              offerCampaignId: true,
             },
           },
         );
@@ -475,10 +499,26 @@ export async function releaseCheckoutReservation(
         return false;
       }
 
+      if (reservation.offerCampaignId) {
+        const slotReleased = await tx.offerCampaign.updateMany({
+          where: { id: reservation.offerCampaignId, reservedQualifyingOrders: { gt: 0 } },
+          data: { reservedQualifyingOrders: { decrement: 1 } },
+        });
+        if (slotReleased.count !== 1) throw new Error("Unable to release expired campaign order slot.");
+      }
+
       const lines =
         parseReservationCart(
           reservation.cart,
         );
+
+      if (reservation.offerCampaignId) {
+        const slotReleased = await tx.offerCampaign.updateMany({
+          where: { id: reservation.offerCampaignId, reservedQualifyingOrders: { gt: 0 } },
+          data: { reservedQualifyingOrders: { decrement: 1 } },
+        });
+        if (slotReleased.count !== 1) throw new Error("Unable to release the reserved campaign order slot.");
+      }
 
       for (const line of lines) {
         if (line.variantId) {
@@ -618,6 +658,7 @@ export async function consumeCheckoutReservation(
   consumed: boolean;
   cart: ReservationCartLine[];
   reservationId: string | null;
+  offerCampaignId: string | null;
 }> {
   const reservation =
     await tx.checkoutReservation.findUnique(
@@ -631,6 +672,7 @@ export async function consumeCheckoutReservation(
           status: true,
           cart: true,
           expiresAt: true,
+          offerCampaignId: true,
         },
       },
     );
@@ -640,6 +682,7 @@ export async function consumeCheckoutReservation(
       consumed: false,
       cart: [],
       reservationId: null,
+      offerCampaignId: null,
     };
   }
 
@@ -657,6 +700,7 @@ export async function consumeCheckoutReservation(
       cart:
         lines,
       reservationId: reservation.id,
+      offerCampaignId: reservation.offerCampaignId,
     };
   }
 
@@ -690,6 +734,13 @@ export async function consumeCheckoutReservation(
     });
 
     if (expiredClaim.count === 1) {
+      if (reservation.offerCampaignId) {
+        const slotReleased = await tx.offerCampaign.updateMany({
+          where: { id: reservation.offerCampaignId, reservedQualifyingOrders: { gt: 0 } },
+          data: { reservedQualifyingOrders: { decrement: 1 } },
+        });
+        if (slotReleased.count !== 1) throw new Error("Unable to release expired campaign order slot.");
+      }
       for (const line of lines) {
         if (line.variantId) {
           const restored = await tx.productVariant.updateMany({
@@ -759,6 +810,17 @@ export async function consumeCheckoutReservation(
         lines,
       reservationId: reservation.id,
     };
+  }
+
+  if (reservation.offerCampaignId) {
+    const slotConsumed = await tx.offerCampaign.updateMany({
+      where: { id: reservation.offerCampaignId, reservedQualifyingOrders: { gt: 0 } },
+      data: {
+        reservedQualifyingOrders: { decrement: 1 },
+        qualifyingOrdersCount: { increment: 1 },
+      },
+    });
+    if (slotConsumed.count !== 1) throw new Error("Unable to consume the reserved campaign order slot.");
   }
 
   for (const line of lines) {
@@ -982,6 +1044,7 @@ async function expireCheckoutReservation(
               status: true,
               expiresAt: true,
               cart: true,
+              offerCampaignId: true,
             },
           },
         );
