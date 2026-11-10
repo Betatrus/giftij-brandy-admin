@@ -29,6 +29,13 @@ type ReservationCartLine = {
   quantity: number;
 };
 
+export class OfferCampaignUnavailableError extends Error {
+  constructor() {
+    super("The offer campaign has reached its qualifying-order limit or is no longer active.");
+    this.name = "OfferCampaignUnavailableError";
+  }
+}
+
 export class StockReservationUnavailableError extends Error {
   constructor() {
     super("Stock is not available.");
@@ -360,7 +367,7 @@ export async function reserveStockForCheckout(
             )
         `;
         if (slotClaimed !== 1) {
-          throw new Error("OFFER_UNAVAILABLE: This campaign has reached its qualifying-order limit or is no longer active.");
+          throw new OfferCampaignUnavailableError();
         }
       }
 
