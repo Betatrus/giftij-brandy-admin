@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "cloudflare:build": "opennextjs-cloudflare build",
+    "cloudflare:build": "npm install && opennextjs-cloudflare build",
     "cloudflare:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "cloudflare:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
     "cloudflare:upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
@@ -65,5 +65,6 @@
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "wrangler": "^4.135.0"
-  }
+  },
+  "packageManager": "npm@11.19.1"
 }
