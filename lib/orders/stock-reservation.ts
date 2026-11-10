@@ -953,6 +953,7 @@ export async function consumeCheckoutReservation(
     cart:
       lines,
     reservationId: reservation.id,
+    offerCampaignId: reservation.offerCampaignId,
   };
 }
 
