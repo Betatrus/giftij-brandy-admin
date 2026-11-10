@@ -108,7 +108,8 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   if (!["DRAFT", "PUBLISHED", "PAUSED", "ENDED"].includes(status)) throw new Error("Invalid campaign status.");
   const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true } } } });
   if (!campaign) throw new Error("Campaign not found.");
-  if (status === "PUBLISHED") throw new Error("Publishing is not enabled yet. The public campaign page, checkout price validation, and qualifying-order reservation flow must be integrated and tested first.");
+  if (status === "PUBLISHED" && !campaign.offerSets.length) throw new Error("Add at least one enabled Offer Set before publishing.");
+  if (status === "PUBLISHED" && !campaign.activeOfferSetId) throw new Error("Choose the Offer Set customers should see before publishing.");
   if (status === "PUBLISHED" && !campaign.activeOfferSetId) throw new Error("Choose the Offer Set customers should see before publishing.");
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
