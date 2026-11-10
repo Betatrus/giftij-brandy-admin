@@ -22,7 +22,7 @@ function clean(value: FormDataEntryValue | null, label: string, max: number) {
 }
 
 function slugify(value: string) {
-  return value.toLowerCase().normalize("NFKD").replace(/[\\u0300-\\u036f]/g, "")
+  return value.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 90);
 }
 
@@ -115,4 +115,29 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
   revalidatePath("/admin/marketing");
+}
+
+export async function updateOfferCampaign(formData: FormData) {
+  const session = await requireMarketingAccess();
+  const id = clean(formData.get("campaignId"), "Campaign", 80);
+  const title = clean(formData.get("title"), "Campaign title", 120);
+  const slug = slugify(String(formData.get("slug") || title));
+  if (!slug) throw new Error("A valid campaign URL slug is required.");
+  const duplicate = await prisma.offerCampaign.findFirst({ where: { slug, id: { not: id } }, select: { id: true } });
+  if (duplicate) throw new Error("That campaign URL is already in use.");
+  const startsAt = optionalDate(formData.get("startsAt"), "Start date");
+  const endsAt = optionalDate(formData.get("endsAt"), "End date");
+  if (startsAt && endsAt && endsAt <= startsAt) throw new Error("End date must be after the start date.");
+  const maxRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
+  const maxQualifyingOrders = maxRaw ? Number(maxRaw) : null;
+  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
+  const campaign = await prisma.offerCampaign.update({ where: { id }, data: {
+    title, slug, description: String(formData.get("description") ?? "").trim() || null,
+    creativeImageUrl: String(formData.get("creativeImageUrl") ?? "").trim() || null,
+    ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
+    startsAt, endsAt, maxQualifyingOrders,
+  }});
+  await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_UPDATED", resource: `OfferCampaign:${id}`, metadata: { title, slug } });
+  revalidatePath("/admin/marketing");
+  return { ok: true, id: campaign.id };
 }
