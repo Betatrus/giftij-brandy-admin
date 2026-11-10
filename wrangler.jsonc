@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "giftij-brandy-admin",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-11-10",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "nodejs_compat_populate_process_env"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "APP_ENV": "production"
+  },
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_PRODUCTION_HYPERDRIVE_ID"
+    }
+  ],
+  "previews": {
+    "vars": {
+      "APP_ENV": "preview"
+    },
+    "hyperdrive": [
+      {
+        "binding": "HYPERDRIVE",
+        "id": "871bdacce38e4e188a3c9b031f328a70"
+      }
+    ]
+  }
+}

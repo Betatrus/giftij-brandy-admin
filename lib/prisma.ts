@@ -1,62 +1,51 @@
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
+import { cache } from "react";
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+const transactionOptions = { maxWait: 10_000, timeout: 15_000 };
 
-/**
- * Preview deployments must never fall back to the Admin Production database.
- * The Vercel Neon integration exposes the isolated staging connection under
- * PREVIEW_DATABASE_URL. Production and local development continue to use
- * DATABASE_URL.
- */
-function resolveDatabaseUrl(): string {
-  if (process.env.VERCEL_ENV === "preview") {
-    const previewDatabaseUrl = process.env.PREVIEW_DATABASE_URL;
+type CloudflareDatabaseEnv = { HYPERDRIVE?: { connectionString: string } };
 
-    if (!previewDatabaseUrl) {
-      throw new Error(
-        "PREVIEW_DATABASE_URL is required for Vercel Preview deployments. Refusing to connect to the Production database.",
-      );
+/** Request-scoped Prisma client for Cloudflare Workers; local Node development
+ * continues to use DATABASE_URL. A deployed Worker fails closed if its
+ * environment-specific Hyperdrive binding is absent. */
+const getRequestPrisma = cache((): PrismaClient => {
+  let cloudflareEnv: CloudflareDatabaseEnv | undefined;
+  try {
+    cloudflareEnv = getCloudflareContext().env as CloudflareDatabaseEnv;
+  } catch {
+    // No Cloudflare request context: local Next.js development/build only.
+  }
+
+  if (cloudflareEnv) {
+    const connectionString = cloudflareEnv.HYPERDRIVE?.connectionString;
+    if (!connectionString) {
+      throw new Error("HYPERDRIVE binding is required. Refusing to fall back to DATABASE_URL in a Cloudflare Worker.");
     }
+    const adapter = new PrismaPg({ connectionString, maxUses: 1 });
+    return new PrismaClient({ adapter, transactionOptions, log: ["error"] });
+  }
 
-    return previewDatabaseUrl;
+  if (process.env.APP_ENV === "preview" || process.env.APP_ENV === "production") {
+    throw new Error("Cloudflare database context is unavailable. Refusing to use a direct database URL in a deployed environment.");
   }
 
   const databaseUrl = process.env.DATABASE_URL;
-
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required to connect to the database.");
-  }
-
-  return databaseUrl;
-}
-
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    datasources: {
-      db: {
-        url: resolveDatabaseUrl(),
-      },
-    },
+  if (!databaseUrl) throw new Error("DATABASE_URL is required for local database access.");
+  return new PrismaClient({
+    datasources: { db: { url: databaseUrl } },
+    transactionOptions,
     log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
-    // Prisma's defaults (maxWait: 2000ms, timeout: 5000ms) assume
-    // low-latency, always-warm connections. Against Neon (serverless
-    // Postgres, pooled connections, occasional cold-start latency per
-    // round trip), those defaults left no headroom — see the
-    // adjustStock/adjustVariantStock transactions in
-    // lib/actions/inventory.ts, which are already the minimum possible
-    // 2 operations (the stock update + its VariantInventoryLog/
-    // InventoryLog entry, kept atomic) and have no further scope left to
-    // cut. maxWait (time allowed to acquire a transaction) and timeout
-    // (time allowed for the transaction to run) are both raised
-    // modestly — enough to absorb normal Neon round-trip variance, not
-    // large enough to mask a genuinely runaway transaction. This is a
-    // global default; individual $transaction() calls can still pass
-    // their own { maxWait, timeout } to override it where truly needed.
-    transactionOptions: {
-      maxWait: 10_000,
-      timeout: 15_000,
-    },
   });
+});
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+// Preserve existing prisma.* call sites while resolving the real client lazily
+// inside the active request context. Never cache a Worker client across requests.
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, property) {
+    const client = getRequestPrisma();
+    const value = Reflect.get(client, property, client);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+});

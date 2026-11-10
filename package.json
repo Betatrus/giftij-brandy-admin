@@ -7,6 +7,11 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "cloudflare:build": "npm install && opennextjs-cloudflare build",
+    "cloudflare:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cloudflare:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy",
+    "cloudflare:upload": "opennextjs-cloudflare build && opennextjs-cloudflare upload",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
@@ -15,11 +20,13 @@
     "prisma:backfill-batch1": "tsx prisma/backfill-batch1.ts",
     "prisma:backfill-variant-color-size": "tsx prisma/backfill-variant-color-size.ts",
     "prisma:seed-categories": "tsx prisma/seed-categories.ts",
-    "prisma:migrate-categories": "tsx prisma/migrate-categories-to-bags-shoes-slippers.ts"
+    "prisma:migrate-categories": "tsx prisma/migrate-categories-to-bags-shoes-slippers.ts",
+    "prisma:seed-preview-admin": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
     "@hookform/resolvers": "^3.9.1",
+    "@prisma/adapter-pg": "5.22.0",
     "@prisma/client": "^5.22.0",
     "@tanstack/react-query": "^5.59.20",
     "bcryptjs": "^2.4.3",
@@ -30,6 +37,7 @@
     "lucide-react": "^0.460.0",
     "next": "^15.5.22",
     "next-auth": "5.0.0-beta.25",
+    "pg": "^8.16.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.53.2",
@@ -42,8 +50,10 @@
     "@auth/core": "0.37.2"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.16",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.9.0",
+    "@types/pg": "^8.15.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "autoprefixer": "^10.4.20",
@@ -53,6 +63,8 @@
     "prisma": "^5.22.0",
     "tailwindcss": "^3.4.14",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
-  }
+    "typescript": "^5.6.3",
+    "wrangler": "^4.135.0"
+  },
+  "packageManager": "npm@11.19.1"
 }
