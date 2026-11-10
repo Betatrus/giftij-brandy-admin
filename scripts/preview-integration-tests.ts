@@ -402,6 +402,80 @@ async function main() {
     logPass("campaign pricing, atomic qualifying-order slots, release and paid consumption");
   }
 
+  // A late paid campaign checkout cannot bypass a qualifying-order slot reallocated after expiry.
+  {
+    const productId = await createInventoryProduct("late-offer", 1);
+    const product = await prisma.product.findUniqueOrThrow({
+      where: { id: productId },
+      select: { slug: true },
+    });
+    const campaignSlug = `preview-late-offer-${suffix}`;
+    const campaign = await prisma.offerCampaign.create({
+      data: {
+        title: "Preview Late Offer Campaign",
+        slug: campaignSlug,
+        status: "PUBLISHED",
+        maxQualifyingOrders: 1,
+      },
+      select: { id: true },
+    });
+    offerCampaignIds.push(campaign.id);
+    const offerSet = await prisma.offerSet.create({
+      data: {
+        campaignId: campaign.id,
+        title: "Preview Late Payment Set",
+        products: { create: { productId, discountPercent: 25 } },
+      },
+      select: { id: true },
+    });
+    await prisma.offerCampaign.update({
+      where: { id: campaign.id },
+      data: { activeOfferSetId: offerSet.id },
+    });
+
+    const resolved = await resolveCartLines([{
+      productSlug: product.slug,
+      quantity: 1,
+      offerCampaignSlug: campaignSlug,
+    }]);
+    const lateReference = newReference("LATE_OFFER");
+    const lateEmail = customerEmail("late-offer");
+    const expired = await reserveStockForCheckout(resolved, campaign.id);
+    reservationIds.push(expired.reservationId);
+    await attachPaymentReferenceToReservation(expired.reservationId, lateReference);
+    await prisma.checkoutReservation.update({
+      where: { id: expired.reservationId },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    });
+    await releaseExpiredCheckoutReservations(25);
+
+    const newerReservation = await reserveStockForCheckout(resolved, campaign.id);
+    reservationIds.push(newerReservation.reservationId);
+
+    const payload = eventFor("charge.success", lateReference, expired.reservationId, productId, lateEmail, { unitPrice: 75 });
+    mockVerifications.set(lateReference, { amount: 7_500, currency: "NGN" });
+    const result = await callWebhook(payload);
+    assert.equal(result.status, 200);
+
+    const order = await prisma.order.findUniqueOrThrow({
+      where: { paymentReference: lateReference },
+      select: { id: true, stockUnavailable: true },
+    });
+    assert.equal(order.stockUnavailable, true);
+    const notes = await prisma.orderNote.findMany({
+      where: { orderId: order.id },
+      select: { note: true },
+    });
+    assert.ok(notes.some((item) => item.note.includes("PAID - STOCK UNAVAILABLE")));
+    assert.ok(notes.some((item) => item.note.includes("PAID - OFFER RESERVATION EXPIRED")));
+    const campaignState = await prisma.offerCampaign.findUniqueOrThrow({
+      where: { id: campaign.id },
+      select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+    });
+    assert.deepEqual(campaignState, { qualifyingOrdersCount: 0, reservedQualifyingOrders: 1 });
+    logPass("late paid campaign checkout is reviewed when its qualifying slot has been reallocated");
+  }
+
   // Expired reservations release stock once, even if cleanup is repeated.
   {
     const productId = await createInventoryProduct("expiry", 3);
