@@ -58,7 +58,6 @@ export async function createOfferCampaign(formData: FormData) {
   }});
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_CREATED", resource: `OfferCampaign:${campaign.id}`, metadata: { title, slug } });
   revalidatePath("/admin/marketing");
-  return { ok: true, id: campaign.id };
 }
 
 export async function createOfferSet(formData: FormData) {
@@ -89,7 +88,6 @@ export async function createOfferSet(formData: FormData) {
   }});
   await logActivity({ userId: session.user.id, action: "OFFER_SET_CREATED", resource: `OfferSet:${offerSet.id}`, metadata: { campaignId, title, productCount: productIds.length } });
   revalidatePath("/admin/marketing");
-  return { ok: true, id: offerSet.id };
 }
 
 export async function activateOfferSet(formData: FormData) {
@@ -131,7 +129,7 @@ export async function updateOfferCampaign(formData: FormData) {
   const maxRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
   const maxQualifyingOrders = maxRaw ? Number(maxRaw) : null;
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
-  const campaign = await prisma.offerCampaign.update({ where: { id }, data: {
+  await prisma.offerCampaign.update({ where: { id }, data: {
     title, slug, description: String(formData.get("description") ?? "").trim() || null,
     creativeImageUrl: String(formData.get("creativeImageUrl") ?? "").trim() || null,
     ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
@@ -139,7 +137,6 @@ export async function updateOfferCampaign(formData: FormData) {
   }});
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_UPDATED", resource: `OfferCampaign:${id}`, metadata: { title, slug } });
   revalidatePath("/admin/marketing");
-  return { ok: true, id: campaign.id };
 }
 
 export async function updateOfferSet(formData: FormData) {
