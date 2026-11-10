@@ -600,8 +600,10 @@ model OfferCampaign {
   endsAt                DateTime?
   maxQualifyingOrders   Int?
   qualifyingOrdersCount Int                 @default(0)
+  reservedQualifyingOrders Int              @default(0)
   activeOfferSetId      String?
   offerSets             OfferSet[]
+  checkoutReservations  CheckoutReservation[]
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
 
@@ -761,6 +763,8 @@ model CheckoutReservation {
   paymentReference String?                   @unique
   status           CheckoutReservationStatus @default(ACTIVE)
   cart             Json
+  offerCampaignId  String?
+  offerCampaign    OfferCampaign?             @relation(fields: [offerCampaignId], references: [id], onDelete: SetNull)
   expiresAt        DateTime
   consumedAt       DateTime?
   releasedAt       DateTime?
@@ -768,5 +772,6 @@ model CheckoutReservation {
   updatedAt        DateTime                  @updatedAt
 
   @@index([status, expiresAt])
+  @@index([offerCampaignId])
   @@index([createdAt])
 }
