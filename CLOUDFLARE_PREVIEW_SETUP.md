@@ -7,10 +7,11 @@ This branch is the Cloudflare migration Preview branch. Do not merge it into `ma
 Configure the Admin Worker build settings:
 
 - Production branch: `main`
-- Build command: `npx opennextjs-cloudflare build`
+- Build command: `npm run cloudflare:build`
 - Deploy command: `npx wrangler deploy`
 - Preview command: `npx wrangler preview`
 - Root directory: `/`
+- Build variable: `SKIP_DEPENDENCY_INSTALL=1` (the build script runs `npm install` itself to synchronize the lockfile before OpenNext builds)
 
 The Preview command must use Cloudflare Worker Previews, not `wrangler versions upload`. Worker Previews use the `previews` block in `wrangler.jsonc` and do not inherit Production bindings.
 
