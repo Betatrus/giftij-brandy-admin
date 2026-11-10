@@ -188,6 +188,7 @@ model Product {
   images         ProductImage[]
   inventory      Inventory?
   orderItems     OrderItem[]
+  offerSetProducts OfferSetProduct[]
 
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -572,6 +573,76 @@ model Campaign {
   updatedAt     DateTime       @updatedAt
 }
 
+enum OfferCampaignStatus {
+  DRAFT
+  PUBLISHED
+  PAUSED
+  ENDED
+}
+
+enum OfferBenefitType {
+  DISCOUNT
+  FREE_DELIVERY
+  GIFT
+}
+
+/// Customer-facing promotional campaign. Separate from the email Campaign model above.
+model OfferCampaign {
+  id                    String              @id @default(cuid())
+  title                 String
+  slug                  String              @unique
+  description           String?             @db.Text
+  announcementHtml      String?             @db.Text
+  creativeImageUrl      String?
+  ctaText               String              @default("Shop the offer")
+  status                OfferCampaignStatus @default(DRAFT)
+  startsAt              DateTime?
+  endsAt                DateTime?
+  maxQualifyingOrders   Int?
+  qualifyingOrdersCount Int                 @default(0)
+  reservedQualifyingOrders Int              @default(0)
+  activeOfferSetId      String?
+  offerSets             OfferSet[]
+  checkoutReservations  CheckoutReservation[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([status, startsAt, endsAt])
+}
+
+/// A campaign can contain many sets; only activeOfferSetId is shown to shoppers at a time.
+model OfferSet {
+  id          String            @id @default(cuid())
+  campaignId  String
+  campaign    OfferCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  title       String
+  description String?           @db.Text
+  sortOrder   Int               @default(0)
+  isEnabled   Boolean           @default(true)
+  products    OfferSetProduct[]
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([campaignId, sortOrder])
+}
+
+/// Offer rules are additive and never overwrite Product.price (the catalogue/base price).
+model OfferSetProduct {
+  id             String          @id @default(cuid())
+  offerSetId     String
+  offerSet       OfferSet        @relation(fields: [offerSetId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
+  discountPercent Decimal?       @db.Decimal(5, 2)
+  freeDelivery   Boolean         @default(false)
+  giftDescription String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([offerSetId, productId])
+  @@index([productId])
+}
+
 // ============================================================
 // STORE SETTINGS
 // ============================================================
@@ -692,6 +763,8 @@ model CheckoutReservation {
   paymentReference String?                   @unique
   status           CheckoutReservationStatus @default(ACTIVE)
   cart             Json
+  offerCampaignId  String?
+  offerCampaign    OfferCampaign?             @relation(fields: [offerCampaignId], references: [id], onDelete: SetNull)
   expiresAt        DateTime
   consumedAt       DateTime?
   releasedAt       DateTime?
@@ -699,5 +772,6 @@ model CheckoutReservation {
   updatedAt        DateTime                  @updatedAt
 
   @@index([status, expiresAt])
+  @@index([offerCampaignId])
   @@index([createdAt])
 }

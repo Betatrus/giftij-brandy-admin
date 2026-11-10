@@ -20,6 +20,7 @@ import {
   releaseExpiredCheckoutReservations,
   reserveStockForCheckout,
   StockReservationUnavailableError,
+  OfferCampaignUnavailableError,
 } from "@/lib/orders/stock-reservation";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 
@@ -58,6 +59,17 @@ export async function POST(
       checkoutInitializeSchema.parse(
         await req.json(),
       );
+
+    // Preserve the existing fullName field in stored order/shipping data while
+    // collecting first and last name separately in the storefront form.
+    const shippingAddress = {
+      ...body.shippingAddress,
+      fullName:
+        [body.shippingAddress.firstName, body.shippingAddress.lastName]
+          .filter(Boolean)
+          .join(" ")
+          .trim() || body.shippingAddress.fullName || "",
+    };
 
     /**
      * Opportunistic cleanup.
@@ -108,9 +120,12 @@ export async function POST(
      * Only requests that successfully reserve inventory continue.
      */
     try {
+      const campaignIds = [...new Set(resolved.map((line) => line.offerCampaignId).filter((id): id is string => Boolean(id)))];
+      if (campaignIds.length > 1) throw new ApiError("VALIDATION_ERROR", "A checkout can use only one Offer Campaign at a time.");
       const reservation =
         await reserveStockForCheckout(
           resolved,
+          campaignIds[0] ?? null,
         );
 
       reservationId =
@@ -200,6 +215,7 @@ export async function POST(
 
             metadata: {
               reservationId,
+              offerCampaignId: resolved.find((line) => line.offerCampaignId)?.offerCampaignId ?? null,
 
               // Server-calculated amount in kobo; webhook uses this for verification.
               expectedAmountKobo: amountKobo,
@@ -218,11 +234,12 @@ export async function POST(
 
                     // Immutable server-resolved unit price for order reconciliation.
                     unitPrice: line.unitPrice,
+                    offerCampaignId: line.offerCampaignId,
+                    offerSetId: line.offerSetId,
                   }),
                 ),
 
-              shippingAddress:
-                body.shippingAddress,
+              shippingAddress,
             },
           }),
         },
@@ -293,6 +310,9 @@ export async function POST(
       origin,
     );
   } catch (error) {
+    if (error instanceof OfferCampaignUnavailableError) {
+      return withCors(fail(new ApiError("OFFER_UNAVAILABLE", "This offer has just ended or reached its qualifying-order limit. Please refresh the campaign page.")), origin);
+    }
     /**
      * If inventory was claimed but a usable Paystack checkout was never
      * handed to the customer, immediately return that stock.

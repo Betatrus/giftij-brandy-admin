@@ -162,9 +162,13 @@ async function verifySuccessfulTransaction(
     );
   }
 
-  if (verified.amount !== Number(expectedAmount)) {
-    throw new PaymentVerificationMismatchError(
-      "Verified Paystack amount does not match the server-calculated checkout amount.",
+  // Paystack's customer-pays-fees setting can make the amount charged
+  // higher than Giftij's server-calculated product subtotal. The checkout
+  // amount remains the lower bound; the extra provider fee is not revenue
+  // and must never be added to the order's product subtotal.
+  if (verified.amount < Number(expectedAmount)) {
+    throw new PaymentReviewRequiredError(
+      "Paystack confirmed a payment below the server-calculated checkout amount.",
     );
   }
 }
@@ -282,10 +286,11 @@ function getCheckoutCustomerDetails(
       : undefined;
 
   const checkoutName =
-    readString(
-      shippingAddress,
-      "fullName",
-    );
+    [
+      readString(shippingAddress, "firstName"),
+      readString(shippingAddress, "lastName"),
+    ].filter(Boolean).join(" ").trim() ||
+    readString(shippingAddress, "fullName");
 
   const checkoutPhone =
     readString(
@@ -447,7 +452,7 @@ export async function POST(
       // The lock + existence check + insert share one transaction, so
       // concurrent Paystack redeliveries cannot create duplicate review rows.
       await prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${resource}))::text AS lock_result`;
         const existingReview = await tx.activityLog.findFirst({
           where: {
             action: "PAYMENT_REVIEW_REQUIRED",
@@ -560,10 +565,10 @@ async function handleChargeSuccess(
   const snapshotAmountKobo = Math.round(snapshotSubtotal * 100);
   if (
     !Number.isSafeInteger(snapshotAmountKobo) ||
-    snapshotAmountKobo !== data.amount ||
-    snapshotAmountKobo !== data.metadata?.expectedAmountKobo
+    snapshotAmountKobo !== Number(data.metadata?.expectedAmountKobo) ||
+    data.amount < snapshotAmountKobo
   ) {
-    throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
+    throw new PaymentReviewRequiredError("Checkout product subtotal does not match the server-calculated checkout amount or the verified payment is insufficient.");
   }
 
   const {
@@ -641,7 +646,7 @@ async function handleChargeSuccess(
     await prisma.$transaction(
       async (tx) => {
         // Serialize a payment reference across all serverless instances.
-        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))`;
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.reference}))::text AS lock_result`;
 
         const duplicate = await tx.order.findFirst({
           where: { paymentReference: data.reference },
@@ -669,6 +674,23 @@ async function handleChargeSuccess(
           );
 
         const hasReservation = reservationResult.cart.length > 0;
+        let offerSlotExpired = false;
+        if (reservationResult.offerCampaignId && !reservationResult.consumed) {
+          // A payment can arrive after the ten-minute reservation expiry. Recount it
+          // only if the campaign still has a qualifying-order slot; otherwise flag it
+          // for admin review instead of silently exceeding the configured limit.
+          const lateSlotClaim = await tx.$executeRaw`
+            UPDATE "OfferCampaign"
+            SET "qualifyingOrdersCount" = "qualifyingOrdersCount" + 1,
+                "updatedAt" = NOW()
+            WHERE "id" = ${reservationResult.offerCampaignId}
+              AND (
+                "maxQualifyingOrders" IS NULL
+                OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
+              )
+          `;
+          offerSlotExpired = lateSlotClaim !== 1;
+        }
         const cartLines = hasReservation
           ? normalizeCartForComparison(reservationResult.cart)
           : normalizeCartForComparison(metadataCartLines);
@@ -709,9 +731,9 @@ async function handleChargeSuccess(
         }
 
         if (!Number.isSafeInteger(Math.round(subtotal * 100)) ||
-            Math.round(subtotal * 100) !== data.amount ||
-            Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo)) {
-          throw new PaymentReviewRequiredError("Checkout cart subtotal does not match the verified Paystack amount.");
+            Math.round(subtotal * 100) !== Number(data.metadata?.expectedAmountKobo) ||
+            data.amount < Math.round(subtotal * 100)) {
+          throw new PaymentReviewRequiredError("Checkout product subtotal does not match the server-calculated checkout amount or the verified payment is insufficient.");
         }
 
         const customer = await findOrCreateCustomerByEmailInTransaction(
@@ -809,6 +831,16 @@ async function handleChargeSuccess(
               },
             },
           );
+
+        if (offerSlotExpired) {
+          await tx.orderNote.create({
+            data: {
+              orderId: created.id,
+              note: "PAID - OFFER RESERVATION EXPIRED: Paystack confirmed payment after the campaign checkout slot expired or was released. Review the campaign qualifying-order limit and this order before fulfilment.",
+              createdBy: "system:paystack_webhook",
+            },
+          });
+        }
 
         if (stockUnavailable) {
           await tx.orderNote.create({

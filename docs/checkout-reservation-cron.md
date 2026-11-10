@@ -1,6 +1,6 @@
 # Checkout reservation expiry scheduler
 
-Giftij Brandy checkout reservations last **7 minutes**. The application enforces that deadline during checkout/payment processing; this endpoint is the independent cleanup trigger that returns stock from abandoned or expired reservations to available inventory.
+Giftij Brandy checkout reservations last **10 minutes**. The application enforces that deadline during checkout/payment processing; this endpoint is the independent cleanup trigger that returns stock from abandoned or expired reservations to available inventory.
 
 ## Endpoint
 
@@ -35,7 +35,7 @@ Each invocation processes at most 25 expired reservations. The cleanup claims ea
 2. Call the endpoint without an Authorization header and confirm `401`.
 3. Call with an incorrect token and confirm `401`.
 4. Call with the correct Preview token and confirm `200` with a `released` count.
-5. In a non-production database, create a test checkout reservation, confirm it is active and held for seven minutes, then wait until it expires.
+5. In a non-production database, create a test checkout reservation, confirm it is active and held for ten minutes, then wait until it expires.
 6. Invoke the endpoint with the correct token. Confirm the reservation changes to `EXPIRED`, `reservedStock` decreases by the reserved quantity, and `currentStock` increases by the same quantity.
 7. Invoke it again. Confirm `released: 0` for that reservation and that stock does not increase a second time.
 8. Test two overlapping invocations against separate test reservations and confirm each reservation is released once.
