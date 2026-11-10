@@ -66,3 +66,15 @@ Do not add a speculative adapter config or upgrade Next.js/Prisma as part of a b
 - Keep the current Neon Production project and data unchanged.
 - Do not create Cloudflare Production secrets, custom domains, DNS changes, Hyperdrive production bindings, or cut over traffic without explicit approval.
 - A green GitHub check or successful compile alone is not evidence that payments, database isolation, authentication, or stock safety work in Workers.
+
+## Preview Super Admin provisioning
+
+The Preview migration branch includes a fail-closed seed command for the existing Preview staff account:
+
+- Account: `bright@gifijbrandy.com`
+- Role: `SUPER_ADMIN`
+- Command: `npm run prisma:seed-preview-admin`
+- Requires `SEED_TARGET=preview`, `SEED_PREVIEW_DATABASE_CONFIRMATION=giftij-brandy-preview-test`, `PREVIEW_DATABASE_URL`, and `SEED_SUPER_ADMIN_PASSWORD` (minimum 12 characters).
+- The script connects only through `PREVIEW_DATABASE_URL`; it never falls back to `DATABASE_URL`.
+- Password is bcrypt-hashed; it is never committed or printed. Existing active Super Admin accounts are left unchanged; the script does not reset passwords.
+- Run manually only after the isolated Preview schema migrations have completed and the Preview database identity has been independently verified. Do not add this seed command to Production deploy/build hooks.
