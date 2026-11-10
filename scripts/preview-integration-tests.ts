@@ -11,7 +11,9 @@ import {
   consumeCheckoutReservation,
   CHECKOUT_RESERVATION_TTL_MS,
   StockReservationUnavailableError,
+  OfferCampaignUnavailableError,
 } from "../lib/orders/stock-reservation";
+import { resolveCartLines } from "../lib/orders/resolve-cart";
 import { POST as paystackWebhook } from "../app/api/webhooks/paystack/route";
 import { POST as checkoutInitialize } from "../app/api/v1/public/checkout/initialize/route";
 import { GET as reservationCron } from "../app/api/cron/expire-checkout-reservations/route";
@@ -29,6 +31,7 @@ const paymentReferences: string[] = [];
 const customerEmails: string[] = [];
 const blogCategoryIds: string[] = [];
 const blogPostIds: string[] = [];
+const offerCampaignIds: string[] = [];
 let storeSettingsSnapshotCaptured = false;
 let originalStoreSettings: { customerCareWhatsApp: string | null; blogNavigationVisible: boolean; blogIndexingEnabled: boolean } | null = null;
 const mockVerifications = new Map<string, { amount: number; currency: string }>();
@@ -315,6 +318,88 @@ async function main() {
     assert.equal(second.consumed, false);
     assert.deepEqual(await inventoryFor(productId), { currentStock: 3, reservedStock: 0, soldStock: 2 });
     logPass("successful payment consumes reservation exactly once");
+  }
+
+  // Offer prices are resolved on the server and qualifying-order slots are concurrency-safe.
+  {
+    const productId = await createInventoryProduct("offer-campaign", 4);
+    const product = await prisma.product.findUniqueOrThrow({
+      where: { id: productId },
+      select: { slug: true },
+    });
+    const campaign = await prisma.offerCampaign.create({
+      data: {
+        title: "Preview Offer Campaign",
+        slug: `preview-offer-${suffix}`,
+        status: "PUBLISHED",
+        maxQualifyingOrders: 1,
+      },
+      select: { id: true },
+    });
+    offerCampaignIds.push(campaign.id);
+    const offerSet = await prisma.offerSet.create({
+      data: {
+        campaignId: campaign.id,
+        title: "Preview First Order Offer",
+        products: {
+          create: {
+            productId,
+            discountPercent: 25,
+          },
+        },
+      },
+      select: { id: true },
+    });
+    await prisma.offerCampaign.update({
+      where: { id: campaign.id },
+      data: { activeOfferSetId: offerSet.id },
+    });
+
+    const resolved = await resolveCartLines([{
+      productSlug: product.slug,
+      quantity: 1,
+      offerCampaignSlug: `preview-offer-${suffix}`,
+    }]);
+    assert.equal(resolved[0]?.unitPrice, 75, "25% campaign discount must be server-calculated from the base price");
+    assert.equal(resolved[0]?.offerCampaignId, campaign.id);
+
+    const firstReservation = await reserveStockForCheckout(resolved, campaign.id);
+    reservationIds.push(firstReservation.reservationId);
+    let campaignState = await prisma.offerCampaign.findUniqueOrThrow({
+      where: { id: campaign.id },
+      select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+    });
+    assert.deepEqual(campaignState, { qualifyingOrdersCount: 0, reservedQualifyingOrders: 1 });
+
+    await assert.rejects(
+      reserveStockForCheckout([{ productId, quantity: 1 }], campaign.id),
+      (error: unknown) => error instanceof OfferCampaignUnavailableError,
+    );
+    assert.deepEqual(await inventoryFor(productId), { currentStock: 3, reservedStock: 1, soldStock: 0 });
+
+    assert.equal(await releaseCheckoutReservation(firstReservation.reservationId), true);
+    campaignState = await prisma.offerCampaign.findUniqueOrThrow({
+      where: { id: campaign.id },
+      select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+    });
+    assert.deepEqual(campaignState, { qualifyingOrdersCount: 0, reservedQualifyingOrders: 0 });
+
+    const paidReservation = await reserveStockForCheckout(resolved, campaign.id);
+    reservationIds.push(paidReservation.reservationId);
+    const reference = newReference("OFFER_SLOT");
+    await attachPaymentReferenceToReservation(paidReservation.reservationId, reference);
+    const consumed = await prisma.$transaction((tx) => consumeCheckoutReservation(tx, reference));
+    assert.equal(consumed.consumed, true);
+    campaignState = await prisma.offerCampaign.findUniqueOrThrow({
+      where: { id: campaign.id },
+      select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+    });
+    assert.deepEqual(campaignState, { qualifyingOrdersCount: 1, reservedQualifyingOrders: 0 });
+    await assert.rejects(
+      reserveStockForCheckout([{ productId, quantity: 1 }], campaign.id),
+      (error: unknown) => error instanceof OfferCampaignUnavailableError,
+    );
+    logPass("campaign pricing, atomic qualifying-order slots, release and paid consumption");
   }
 
   // Expired reservations release stock once, even if cleanup is repeated.
@@ -745,6 +830,9 @@ async function cleanup() {
     await prisma.checkoutReservation.deleteMany({
       where: { id: { in: Array.from(reservationIdsForCleanup) } },
     });
+  }
+  if (offerCampaignIds.length) {
+    await prisma.offerCampaign.deleteMany({ where: { id: { in: offerCampaignIds } } });
   }
   if (productIds.length) {
     await prisma.productVariant.deleteMany({ where: { productId: { in: productIds } } });
