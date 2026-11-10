@@ -20,6 +20,7 @@ import {
   releaseExpiredCheckoutReservations,
   reserveStockForCheckout,
   StockReservationUnavailableError,
+  OfferCampaignUnavailableError,
 } from "@/lib/orders/stock-reservation";
 import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 
@@ -308,6 +309,9 @@ export async function POST(
       origin,
     );
   } catch (error) {
+    if (error instanceof OfferCampaignUnavailableError) {
+      return withCors(fail(new ApiError("OFFER_UNAVAILABLE", "This offer has just ended or reached its qualifying-order limit. Please refresh the campaign page.")), origin);
+    }
     /**
      * If inventory was claimed but a usable Paystack checkout was never
      * handed to the customer, immediately return that stock.
