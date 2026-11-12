@@ -585,11 +585,6 @@ enum OfferCampaignStatus {
   ENDED
 }
 
-enum OfferBenefitType {
-  DISCOUNT
-  FREE_DELIVERY
-  GIFT
-}
 
 /// Customer-facing promotional campaign. Separate from the email Campaign model above.
 model OfferCampaign {
