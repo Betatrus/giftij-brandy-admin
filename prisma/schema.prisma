@@ -404,6 +404,11 @@ model Order {
   @@index([createdAt])
 }
 
+model OrderNumberCounter {
+  year      Int @id
+  lastValue Int @default(0)
+}
+
 model OrderItem {
   id        String  @id @default(cuid())
   orderId   String
