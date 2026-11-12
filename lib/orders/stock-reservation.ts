@@ -199,6 +199,112 @@ function parseReservationCart(
 }
 
 /**
+ * Restores each still-existing stock unit when a reservation is released.
+ *
+ * Historical reservations can outlive a product/variant that an administrator
+ * later deleted. A missing stock row has nothing left to restore, so record it
+ * explicitly and continue restoring the other valid cart lines. If the row
+ * still exists but its reserved quantity is inconsistent, fail the transaction
+ * rather than silently masking inventory drift.
+ */
+async function restoreReservationCartLines(
+  tx: Prisma.TransactionClient,
+  reservation: { id: string; paymentReference: string | null },
+  lines: ReservationCartLine[],
+  source: string,
+): Promise<void> {
+  for (const line of lines) {
+    if (line.variantId) {
+      const variant = await tx.productVariant.findUnique({
+        where: { id: line.variantId },
+        select: { productId: true },
+      });
+
+      if (!variant || variant.productId !== line.productId) {
+        await tx.activityLog.create({
+          data: {
+            systemSource: "checkout_reservation",
+            action: "RESERVATION_ORPHANED_STOCK_UNIT",
+            resource: `CheckoutReservation:${reservation.id}`,
+            metadata: {
+              reservationId: reservation.id,
+              paymentReference: reservation.paymentReference,
+              productId: line.productId,
+              variantId: line.variantId,
+              quantity: line.quantity,
+              source,
+              reason: "STOCK_UNIT_MISSING_AT_RELEASE",
+            },
+          },
+        });
+        continue;
+      }
+
+      const restored = await tx.productVariant.updateMany({
+        where: {
+          id: line.variantId,
+          productId: line.productId,
+          reservedStock: { gte: line.quantity },
+        },
+        data: {
+          reservedStock: { decrement: line.quantity },
+          currentStock: { increment: line.quantity },
+        },
+      });
+
+      if (restored.count !== 1) {
+        throw new Error(
+          `Unable to restore reserved stock for variant ${line.variantId}; reserved quantity is inconsistent.`,
+        );
+      }
+      continue;
+    }
+
+    const inventory = await tx.inventory.findUnique({
+      where: { productId: line.productId },
+      select: { id: true },
+    });
+
+    if (!inventory) {
+      await tx.activityLog.create({
+        data: {
+          systemSource: "checkout_reservation",
+          action: "RESERVATION_ORPHANED_STOCK_UNIT",
+          resource: `CheckoutReservation:${reservation.id}`,
+          metadata: {
+            reservationId: reservation.id,
+            paymentReference: reservation.paymentReference,
+            productId: line.productId,
+            variantId: null,
+            quantity: line.quantity,
+            source,
+            reason: "STOCK_UNIT_MISSING_AT_RELEASE",
+          },
+        },
+      });
+      continue;
+    }
+
+    const restored = await tx.inventory.updateMany({
+      where: {
+        productId: line.productId,
+        reservedStock: { gte: line.quantity },
+      },
+      data: {
+        reservedStock: { decrement: line.quantity },
+        currentStock: { increment: line.quantity },
+      },
+    });
+
+    if (restored.count !== 1) {
+      throw new Error(
+        `Unable to restore reserved stock for product ${line.productId}; reserved quantity is inconsistent.`,
+      );
+    }
+  }
+}
+
+/**
  * Atomically moves available stock into reserved stock.
  *
  * IMPORTANT:
@@ -462,6 +568,7 @@ export async function releaseCheckoutReservation(
               id: true,
               status: true,
               cart: true,
+              paymentReference: true,
               offerCampaignId: true,
             },
           },
@@ -519,84 +626,12 @@ export async function releaseCheckoutReservation(
         if (slotReleased.count !== 1) throw new Error("Unable to release the reserved campaign order slot.");
       }
 
-      for (const line of lines) {
-        if (line.variantId) {
-          const restored =
-            await tx.productVariant.updateMany(
-              {
-                where: {
-                  id:
-                    line.variantId,
-
-                  productId:
-                    line.productId,
-
-                  reservedStock: {
-                    gte:
-                      line.quantity,
-                  },
-                },
-
-                data: {
-                  reservedStock: {
-                    decrement:
-                      line.quantity,
-                  },
-
-                  currentStock: {
-                    increment:
-                      line.quantity,
-                  },
-                },
-              },
-            );
-
-          if (
-            restored.count !== 1
-          ) {
-            throw new Error(
-              `Unable to release reserved stock for variant ${line.variantId}.`,
-            );
-          }
-
-          continue;
-        }
-
-        const restored =
-          await tx.inventory.updateMany(
-            {
-              where: {
-                productId:
-                  line.productId,
-
-                reservedStock: {
-                  gte:
-                    line.quantity,
-                },
-              },
-
-              data: {
-                reservedStock: {
-                  decrement:
-                    line.quantity,
-                },
-
-                currentStock: {
-                  increment:
-                    line.quantity,
-                },
-              },
-            },
-          );
-
-        if (
-          restored.count !== 1
-        ) {
-          throw new Error(
-            `Unable to release reserved stock for product ${line.productId}.`,
-          );
-        }
-      }
+      await restoreReservationCartLines(
+        tx,
+        { id: reservation.id, paymentReference: reservation.paymentReference },
+        lines,
+        "checkout_release",
+      );
 
       return true;
     },
@@ -741,38 +776,12 @@ export async function consumeCheckoutReservation(
         });
         if (slotReleased.count !== 1) throw new Error("Unable to release expired campaign order slot.");
       }
-      for (const line of lines) {
-        if (line.variantId) {
-          const restored = await tx.productVariant.updateMany({
-            where: {
-              id: line.variantId,
-              productId: line.productId,
-              reservedStock: { gte: line.quantity },
-            },
-            data: {
-              reservedStock: { decrement: line.quantity },
-              currentStock: { increment: line.quantity },
-            },
-          });
-          if (restored.count !== 1) {
-            throw new Error(`Unable to release expired reservation for variant ${line.variantId}.`);
-          }
-        } else {
-          const restored = await tx.inventory.updateMany({
-            where: {
-              productId: line.productId,
-              reservedStock: { gte: line.quantity },
-            },
-            data: {
-              reservedStock: { decrement: line.quantity },
-              currentStock: { increment: line.quantity },
-            },
-          });
-          if (restored.count !== 1) {
-            throw new Error(`Unable to release expired reservation for product ${line.productId}.`);
-          }
-        }
-      }
+      await restoreReservationCartLines(
+        tx,
+        { id: reservation.id, paymentReference },
+        lines,
+        "payment_webhook_expiry",
+      );
     }
 
     return {
@@ -1047,6 +1056,7 @@ async function expireCheckoutReservation(
               status: true,
               expiresAt: true,
               cart: true,
+              paymentReference: true,
               offerCampaignId: true,
             },
           },
@@ -1105,84 +1115,12 @@ async function expireCheckoutReservation(
           reservation.cart,
         );
 
-      for (const line of lines) {
-        if (line.variantId) {
-          const restored =
-            await tx.productVariant.updateMany(
-              {
-                where: {
-                  id:
-                    line.variantId,
-
-                  productId:
-                    line.productId,
-
-                  reservedStock: {
-                    gte:
-                      line.quantity,
-                  },
-                },
-
-                data: {
-                  reservedStock: {
-                    decrement:
-                      line.quantity,
-                  },
-
-                  currentStock: {
-                    increment:
-                      line.quantity,
-                  },
-                },
-              },
-            );
-
-          if (
-            restored.count !== 1
-          ) {
-            throw new Error(
-              `Unable to expire reserved stock for variant ${line.variantId}.`,
-            );
-          }
-
-          continue;
-        }
-
-        const restored =
-          await tx.inventory.updateMany(
-            {
-              where: {
-                productId:
-                  line.productId,
-
-                reservedStock: {
-                  gte:
-                    line.quantity,
-                },
-              },
-
-              data: {
-                reservedStock: {
-                  decrement:
-                    line.quantity,
-                },
-
-                currentStock: {
-                  increment:
-                    line.quantity,
-                },
-              },
-            },
-          );
-
-        if (
-          restored.count !== 1
-        ) {
-          throw new Error(
-            `Unable to expire reserved stock for product ${line.productId}.`,
-          );
-        }
-      }
+      await restoreReservationCartLines(
+        tx,
+        { id: reservation.id, paymentReference: reservation.paymentReference },
+        lines,
+        "scheduled_expiry",
+      );
 
       return true;
     },
