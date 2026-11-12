@@ -896,7 +896,7 @@ async function handleChargeSuccess(
       `Order:${order.order.id}`,
 
     metadata: {
-      orderNumber,
+      orderNumber: order.order.orderNumber,
 
       reference:
         data.reference,
