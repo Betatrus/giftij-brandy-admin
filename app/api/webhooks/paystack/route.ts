@@ -140,8 +140,17 @@ async function verifySuccessfulTransaction(
     | null;
   const verified = payload?.data;
 
+  if (!response.ok) {
+    // A provider API outage, rate limit, or configuration error must remain
+    // retryable. Do not acknowledge a signed success webhook as permanently
+    // ignored merely because the verification request could not be completed.
+    throw new Error(
+      `Paystack transaction verification request failed (HTTP ${response.status}).`,
+    );
+  }
+
   if (
-    !response.ok || payload?.status !== true || verified?.status !== "success" ||
+    payload?.status !== true || verified?.status !== "success" ||
     verified.reference !== data.reference ||
     !Number.isSafeInteger(verified.amount) || verified.amount !== data.amount ||
     verified.currency !== "NGN" || (data.currency ?? "NGN") !== "NGN"
