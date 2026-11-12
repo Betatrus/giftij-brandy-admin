@@ -19,7 +19,6 @@ import {
   consumeCheckoutReservation,
   releaseCheckoutReservationByReference,
 } from "@/lib/orders/stock-reservation";
-import { generateUniqueValueLike } from "@/lib/utils/slug";
 
 export const runtime = "nodejs";
 
@@ -350,28 +349,45 @@ function getCheckoutCustomerDetails(
   };
 }
 
-async function generateOrderNumber() {
-  const base =
-    `GB${new Date().getFullYear()}`;
-
-  return generateUniqueValueLike(
-    base,
-    async (
-      candidate,
-    ) => {
-      const existing =
-        await prisma.order.findUnique(
-          {
-            where: {
-              orderNumber:
-                candidate,
-            },
-          },
-        );
-
-      return !!existing;
-    },
+async function generateOrderNumber(
+  tx: Prisma.TransactionClient,
+): Promise<string> {
+  // Giftij Brandy order numbers use the Lagos business calendar year.
+  const year = Number(
+    new Intl.DateTimeFormat("en", {
+      timeZone: "Africa/Lagos",
+      year: "numeric",
+    }).format(new Date()),
   );
+
+  // The INSERT ... ON CONFLICT update serializes concurrent allocations
+  // for the same year across all server instances. This runs inside the
+  // order-creation transaction, so a failed order creation rolls back
+  // the counter increment as well.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const rows = await tx.$queryRaw<Array<{ lastValue: number }>>`
+      INSERT INTO "OrderNumberCounter" ("year", "lastValue")
+      VALUES (${year}, 1)
+      ON CONFLICT ("year")
+      DO UPDATE SET "lastValue" = "OrderNumberCounter"."lastValue" + 1
+      RETURNING "lastValue"
+    `;
+
+    const lastValue = Number(rows[0]?.lastValue);
+    if (!Number.isSafeInteger(lastValue) || lastValue < 1) {
+      throw new Error("Unable to allocate the yearly order number.");
+    }
+
+    const candidate = `GB-${year}-${String(lastValue).padStart(4, "0")}`;
+    const existing = await tx.order.findUnique({
+      where: { orderNumber: candidate },
+      select: { id: true },
+    });
+
+    if (!existing) return candidate;
+  }
+
+  throw new Error("Unable to allocate a unique order number after 100 attempts.");
 }
 
 export async function POST(
@@ -639,9 +655,6 @@ async function handleChargeSuccess(
     );
   }
 
-  const orderNumber =
-    await generateOrderNumber();
-
   const order =
     await prisma.$transaction(
       async (tx) => {
@@ -771,6 +784,8 @@ async function handleChargeSuccess(
             )
           );
         }
+
+        const orderNumber = await generateOrderNumber(tx);
 
         const created =
           await tx.order.create(
