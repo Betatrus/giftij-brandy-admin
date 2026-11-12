@@ -1,5 +1,4 @@
 CREATE TYPE "OfferCampaignStatus" AS ENUM ('DRAFT', 'PUBLISHED', 'PAUSED', 'ENDED');
-CREATE TYPE "OfferBenefitType" AS ENUM ('DISCOUNT', 'FREE_DELIVERY', 'GIFT');
 
 CREATE TABLE "OfferCampaign" (
   "id" TEXT NOT NULL,
