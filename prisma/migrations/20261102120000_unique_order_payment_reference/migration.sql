@@ -15,5 +15,5 @@ BEGIN
   END IF;
 END $$;
 
-CREATE UNIQUE INDEX IF NOT EXISTS "Order_paymentReference_key"
+CREATE UNIQUE INDEX "Order_paymentReference_key"
 ON "Order"("paymentReference");
