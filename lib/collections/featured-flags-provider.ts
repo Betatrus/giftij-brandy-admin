@@ -5,19 +5,8 @@ import { prisma } from "@/lib/prisma";
  * admin toggle UI, the product validator, and the public API's `featured`
  * query param all import from here rather than duplicating the list.
  */
-export const FEATURED_FLAG_OPTIONS = [
-  "hero",
-  "best_sellers",
-  "fan_favorites",
-  "new_arrivals",
-  "trending",
-  "luxury_collection",
-  "recommended",
-  "limited_edition",
-  "recently_added",
-] as const;
-
-export type FeaturedFlag = (typeof FEATURED_FLAG_OPTIONS)[number];
+import { FEATURED_FLAG_OPTIONS, type FeaturedFlag } from "@/lib/collections/featured-flags";
+export { FEATURED_FLAG_OPTIONS, type FeaturedFlag } from "@/lib/collections/featured-flags";
 
 /**
  * Abstraction over "which products belong to collection X". The MVP

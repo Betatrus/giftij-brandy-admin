@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FEATURED_FLAG_OPTIONS } from "@/lib/collections/featured-flags-provider";
+import { FEATURED_FLAG_OPTIONS } from "@/lib/collections/featured-flags";
 
 export const productSortOptions = ["newest", "price_asc", "price_desc", "name_asc"] as const;
 
