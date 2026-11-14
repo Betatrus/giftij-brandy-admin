@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { unstable_cache } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/respond";
 import { ApiError } from "@/lib/api/api-error";
 import { withCors, corsPreflight } from "@/lib/api/cors";
@@ -8,8 +7,11 @@ import { checkRateLimit, getClientIp } from "@/lib/api/rate-limit";
 import { categoryListQuerySchema } from "@/lib/validators/public/categories";
 import { PUBLIC_CATEGORY_SELECT, toCategoryTree, toFlatCategoryList } from "@/lib/api/public-category-select";
 
+export const dynamic = "force-dynamic";
+
 const getCachedCategories = unstable_cache(
   async () => {
+    const { prisma } = await import("@/lib/prisma");
     return prisma.category.findMany({
       where: { isActive: true },
       select: PUBLIC_CATEGORY_SELECT,
