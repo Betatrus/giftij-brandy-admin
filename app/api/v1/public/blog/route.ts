@@ -1,13 +1,15 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/respond";
 import { withCors, corsPreflight } from "@/lib/api/cors";
 import { hasValidStorefrontKey, storefrontUnauthorizedResponse } from "@/lib/api/storefront-auth";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const origin = req.headers.get("origin");
   if (!hasValidStorefrontKey(req)) return withCors(storefrontUnauthorizedResponse(), origin);
   try {
+    const { prisma } = await import("@/lib/prisma");
     const now = new Date();
     const [settings, posts] = await Promise.all([
       prisma.storeSettings.findUnique({ where: { id: "singleton" }, select: { blogIndexingEnabled: true } }),
