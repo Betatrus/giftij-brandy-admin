@@ -1,93 +1,207 @@
-# Giftij Brandy Admin Portal — Milestone 1: Foundation & Auth
+# Giftij Brandy Admin
 
-## What's included in this milestone
+Giftij Brandy's internal commerce operations application and backend API. The project is a Next.js 15 App Router application written in TypeScript, using Prisma and PostgreSQL.
 
-- Next.js 15 App Router + TypeScript + Tailwind, design tokens matching the storefront
-- PostgreSQL schema (Prisma) covering the full business domain: products, variants,
-  inventory, orders, customers, communications (enquiries/complaints), campaigns,
-  RBAC, and activity logging
-- Auth.js (Credentials provider) with hashed passwords
-- RBAC: **Super Admin** (full access) vs **Support Admin** (operational access,
-  financials hidden) — enforced in `lib/permissions.ts`, `middleware.ts`, and at
-  the page level, not just in the UI
-- Protected `/admin`, `/settings`, `/staff` routes via middleware
-- Cloudinary + Resend clients wired and ready for Milestone 2+
-- Working login page and dashboard shell that already demonstrates
-  role-based widget visibility
+This README describes the current application on the `release/production-2026-11-11` branch. It replaces the original milestone-one setup notes, which no longer represented the application.
 
-## Setup
+## Application responsibilities
+
+The Admin application is the operational system of record for the Giftij Brandy storefront. Its current data model and application code cover:
+
+- **Staff authentication and access control:** Auth.js Credentials sign-in, bcrypt password hashes, active/inactive staff accounts, and role-based access for `SUPER_ADMIN`, `TECHNICAL_SUPPORT`, and `SUPPORT_ADMIN`.
+- **Catalogue:** products, categories, product specifications, product images, product lifecycle states, and product variants.
+- **Inventory:** stock on hand, reserved, sold, damaged and returned quantities; separate base-product and variant inventory records; inventory adjustment history.
+- **Orders and customers:** orders, order items, customer records, order notes and timeline events, and customer activity.
+- **Checkout and payment processing:** Paystack webhook handling, payment verification, checkout reservations, stock allocation, and order creation.
+- **Returns and refunds:** customer return records, restock quantities, refund amounts and refund status.
+- **Customer communications:** enquiries, complaints, assignment, replies and ticket statuses.
+- **Marketing:** email campaign records, offer campaigns, offer sets and product-level offer rules.
+- **Editorial CMS:** blog posts, categories, publication scheduling, SEO metadata, indexing controls and old-slug redirects.
+- **Store settings and auditability:** customer-care WhatsApp settings, activity logs and operational event history.
+
+The Prisma schema is the authoritative description of persisted data. Actual permissions and business rules are enforced in server-side application code; hiding a control in the interface is not a security boundary.
+
+## Technology
+
+- Next.js 15 App Router
+- React 18 and TypeScript
+- Auth.js (NextAuth v5 beta) with Credentials provider and Prisma adapter
+- PostgreSQL with Prisma ORM 5
+- Tailwind CSS
+- Cloudinary for product/editorial image assets
+- Paystack for payment processing
+- Resend for transactional/email delivery integration
+- Vercel deployment support
+
+## Local development
+
+### Requirements
+
+- Node.js compatible with the Next.js version in `package.json`
+- npm
+- A PostgreSQL database
+- Cloudinary credentials for image upload features
+- Paystack and Resend credentials for the related integrations
+
+### Install
 
 ```bash
 npm install
-cp .env.example .env        # fill in DATABASE_URL, AUTH_SECRET, etc.
-npx auth secret              # generates AUTH_SECRET if you don't have one
-npm run prisma:migrate       # creates all tables
-npm run prisma:seed          # creates your first Super Admin login
+cp .env.example .env
+```
+
+Fill in the local environment values described below. Then generate the Prisma client and start the development server:
+
+```bash
+npx prisma generate
 npm run dev
 ```
 
-Log in at `http://localhost:3000/login` with the email/password from
-`SEED_SUPER_ADMIN_EMAIL` / `SEED_SUPER_ADMIN_PASSWORD` in your `.env`
-(default: `bright@giftijbrandy.com` / `ChangeMe123!` — **change this password
-after first login**, there's no reset flow yet).
+Open [http://localhost:3000](http://localhost:3000).
 
-## How the financial-data restriction actually works
+Do not point local development at the live Production database unless a task explicitly requires it and the owner has approved that access. Prefer a disposable local database or the isolated Preview database.
 
-This was the core requirement, so it's worth being explicit about where the
-enforcement lives — three layers, not one:
+## Environment variables
 
-1. **`lib/permissions.ts`** — `ROLE_PERMISSIONS` map + `stripFinancialFields()`.
-   Any server action returning a Product, Order, or dashboard aggregate must
-   call this before sending data back. It deletes `costPrice`, `profit`,
-   `revenue`, `grossProfit`, `netProfit`, `profitMargin` from the payload for
-   Support Admin — the fields never leave the server, so there's nothing to
-   hide client-side.
-2. **`middleware.ts`** — blocks Support Admin from ever loading `/settings` or
-   `/staff` at the route level (redirect, not a client-side flash of content).
-3. **`components/admin/sidebar.tsx`** — hides nav items for Support Admin.
-   This is UX only; it is not the security boundary. Don't rely on it alone
-   when building later modules.
+Use the repository's `.env.example` as the current variable-name reference. Values must be configured in the relevant deployment environment; never commit real credentials.
 
-When you build Products/Orders in Milestone 2, every server action that
-touches `costPrice` or `profit` needs to call
-`assertCanViewFinancials(session.user.role)` or
-`stripFinancialFields(product, session.user.role)` — whichever fits the case.
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Runtime PostgreSQL connection (normally pooled for Neon). |
+| `DIRECT_URL` | Direct PostgreSQL connection used by Prisma migration tooling. |
+| `PREVIEW_DATABASE_URL` | Preview-only database connection used by the Preview database-routing safeguards. Do not set this to Production. |
+| `AUTH_SECRET` | Auth.js signing/encryption secret. Generate with `npx auth secret`. |
+| `AUTH_URL` | Canonical Admin application URL for the environment, where required by the deployment. |
+| `CLOUDINARY_CLOUD_NAME` | Cloudinary account cloud name. |
+| `CLOUDINARY_API_KEY` | Cloudinary API key. |
+| `CLOUDINARY_API_SECRET` | Cloudinary API secret. |
+| `RESEND_API_KEY` | Resend API key. |
+| `RESEND_FROM_ADDRESS` | Verified sender address for email. |
+| `CRON_SECRET` | Bearer-token secret protecting scheduled reservation-expiry work. |
+| `PAYSTACK_SECRET_KEY` | Server-side Paystack secret used for payment verification and related API calls. Never expose it to the browser. |
+| `STOREFRONT_URL` | Storefront base URL used when constructing payment callback URLs. |
+| `CUSTOMER_CARE_WHATSAPP` | Optional international-format customer-care number. |
+| `PUBLIC_API_ALLOWED_ORIGINS` | Comma-separated CORS allow-list for public API requests. |
+| `SEED_SUPER_ADMIN_EMAIL` | Optional email for the initial Super Admin seed. |
+| `SEED_SUPER_ADMIN_PASSWORD` | Optional password for the initial Super Admin seed. |
 
-## What's NOT built yet (by design — later milestones)
+Use separate credentials and values for Preview and Production. Never copy a Production database URL or live Paystack secret into Preview. Do not paste secrets into issues, pull requests, chat, logs or this README.
 
-- Product/Inventory/Order/Customer CRUD screens (Milestone 2+)
-- Public `/api/public/products` endpoint that the storefront will consume
-- Paystack webhook handler
-- Campaigns, email automation, analytics, reports
+## Database and Prisma
 
-## Next step
+The Prisma schema is in `prisma/schema.prisma`; migration history is in `prisma/migrations/`.
 
-Once you've confirmed login works and you're happy with the RBAC behavior
-(try logging in as a Support Admin — seed one manually via Prisma Studio
-with `role: SUPPORT_ADMIN` — and confirm `/settings` redirects you), say the
-word and I'll start Milestone 2: Products & Inventory.
+Useful commands:
 
----
-
-## Milestone 2: Products & Inventory
-
-Adds full product management (CRUD, variants, specs, Cloudinary image
-upload, homepage placement toggles) and inventory tracking (stock levels,
-adjustments, low-stock flagging). See `CHANGES.md` for the full file list,
-migration notes, and manual testing checklist for this milestone.
-
-**Before running Milestone 2 locally**, since `package.json` changed:
 ```bash
-rm -rf node_modules package-lock.json
-npm install
 npx prisma generate
+npx prisma migrate status
+npx prisma studio
 ```
 
-New admin pages: `/admin/products`, `/admin/products/new`,
-`/admin/products/[id]/edit`, `/admin/inventory`.
+For a new disposable development database only, apply migrations with:
 
-**RBAC in this milestone:** Support Admin can create/edit/archive products
-and adjust inventory, but the Cost Price field is entirely absent from
-their view of the product form and from any data the server sends them —
-see `lib/permissions.ts` (`stripFinancialFields`) and
-`lib/actions/products.ts` for where this is enforced.
+```bash
+npx prisma migrate deploy
+```
+
+**Production database changes require an explicit migration plan and approval.** Do not run `prisma migrate dev`, `prisma db push`, reset commands, seed scripts or migration deployment against Production as an incidental part of a Vercel deployment. Review migration history and the target database first, take an appropriate backup, and use the approved release procedure.
+
+### Migration reconciliation note
+
+The Production database's recorded Prisma history includes the legacy migration `20261029172544_add_order_number_counter`, while its original migration source file was not present on this release branch during the November 2026 release review. Do not recreate, delete, mark rolled back, or otherwise alter historical migration records by guesswork. Reconcile this discrepancy deliberately before claiming that a fresh Prisma migration-status comparison is fully clean.
+
+## Vercel build and Preview safeguards
+
+The configured Vercel build command is:
+
+```bash
+sh scripts/vercel-build.sh
+```
+
+The script always runs the application build. It only applies Prisma migrations and runs the Preview verification/integration scripts when `RUN_PREVIEW_MIGRATIONS=1` **and** `VERCEL_ENV=preview`. It exits with an error if that flag is enabled outside a Preview deployment.
+
+This guard is a safety check, not a substitute for verifying environment-variable scopes. Keep Preview database credentials and migration flags scoped to Preview. Production must use its approved database and release process; do not enable Preview migration settings for Production.
+
+Before deploying a new Vercel project:
+
+1. Connect the intended repository and select `release/production-2026-11-11` as the Production Branch.
+2. Configure the required environment variables for the intended environment. Check every database URL and secret scope carefully.
+3. Confirm the deployment's build command is `sh scripts/vercel-build.sh`.
+4. Deploy and inspect the build logs and resulting deployment status.
+5. Verify the Admin application, authentication, database-backed pages and required API endpoints using the deployment URL.
+6. Confirm the Storefront points to the intended Admin API deployment before changing any public domain or webhook configuration.
+
+A green Vercel **Ready** status means the deployment completed; it does not by itself prove database connectivity, correct credentials, successful authentication, webhook delivery, scheduled jobs or end-to-end checkout.
+
+## Payment and inventory safety
+
+Payment and stock behavior is business-critical. Preserve these invariants when changing this code:
+
+- A browser redirect or client-side success message is not proof of payment.
+- Verify Paystack webhook signatures server-side and verify the transaction with Paystack before treating a payment as successful.
+- Check the transaction reference, status, amount and currency against the server-calculated checkout.
+- Process duplicate webhook deliveries idempotently; one successful payment must not create duplicate orders or consume stock twice.
+- Failed, abandoned or incomplete payments must not deduct stock.
+- Reserve the full requested quantity atomically or reject the reservation; do not partially reserve or oversell.
+- Consume a valid reservation only after verified payment. Release expired/failed reservations according to the approved payment-status procedure.
+- If payment succeeds after the reservation expires and stock is no longer available, record the stock-unavailable review state for an administrator. Never create negative stock.
+- Keep payment secrets server-side and keep Preview/Test payment configuration separate from Production/Live configuration.
+
+Do not weaken these safeguards to make a deployment or manual test pass.
+
+## Scheduled reservation expiry
+
+Reservation expiry is a server-side scheduled operation protected by `CRON_SECRET`. Configure the scheduler and endpoint for each environment deliberately, with environment-specific URLs and secrets. Confirm the scheduler is enabled and inspect its execution logs; a successful application deployment does not automatically prove that a scheduled job is running.
+
+## Initial staff provisioning
+
+The seed script is `prisma/seed.ts`; run it only as part of an explicitly approved first-time provisioning process against the intended database. It creates a Super Admin only if the configured email does not already exist.
+
+```bash
+npm run prisma:seed
+```
+
+The seed script has a fallback password for local development. Set a strong, unique `SEED_SUPER_ADMIN_PASSWORD` before any approved use, never rely on the fallback for a real account, and change the credential through the approved account-management process. Do not run the seed casually against an existing Production database.
+
+## Package scripts
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the local Next.js development server. |
+| `npm run build` | Build the Next.js application. |
+| `npm run start` | Start the built application. |
+| `npm run prisma:generate` | Generate the Prisma client. |
+| `npm run prisma:migrate` | Run Prisma's development migration command; use only with a disposable development database. |
+| `npm run prisma:studio` | Open Prisma Studio. |
+| `npm run prisma:seed` | Run the initial Super Admin seed; requires explicit approval and the correct database. |
+
+## Release checklist
+
+- [ ] Confirm the exact branch and commit being deployed.
+- [ ] Confirm the Production and Preview environment-variable scopes.
+- [ ] Confirm the Admin runtime database points to the intended existing database.
+- [ ] Confirm the Preview database is isolated and Preview-only.
+- [ ] Review Prisma migration status and resolve known historical discrepancies safely.
+- [ ] Confirm the Vercel build succeeds without unintended migration execution.
+- [ ] Confirm Admin login and role-based access.
+- [ ] Confirm product, inventory, order and customer data load correctly.
+- [ ] Confirm product image upload and retrieval through the configured Cloudinary account.
+- [ ] Confirm the public Storefront API responds from the intended deployment and the Storefront can load product data.
+- [ ] Confirm Paystack webhook configuration and delivery using the appropriate Test/Live environment without mixing credentials.
+- [ ] Confirm reservation expiry scheduling and logs.
+- [ ] Run the approved payment, reservation, idempotency and inventory tests before routing live traffic.
+- [ ] Only after successful validation, plan any domain or webhook cutover separately.
+
+## Operational boundaries
+
+- Keep the existing Production database and customer data intact during hosting migration.
+- Do not change DNS, the live Paystack webhook, or customer-facing Production routing as part of a Preview test.
+- Do not run database migrations or seed scripts just because a new Vercel project has been created.
+- Preserve the current storefront design and customer checkout experience unless a separately approved task requires a change.
+- Treat the Google Cloud deployment as a separately validated backup target; it must not share or mutate Production resources until its configuration and recovery procedure have been reviewed.
+
+## Repository
+
+- GitHub: [Betatrus/giftij-brandy-admin](https://github.com/Betatrus/giftij-brandy-admin)
+- Release branch: [release/production-2026-11-11](https://github.com/Betatrus/giftij-brandy-admin/tree/release/production-2026-11-11)
