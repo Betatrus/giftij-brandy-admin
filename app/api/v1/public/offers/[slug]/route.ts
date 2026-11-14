@@ -1,5 +1,4 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/respond";
 import { ApiError } from "@/lib/api/api-error";
 import { withCors, corsPreflight } from "@/lib/api/cors";
@@ -15,6 +14,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     if (!rate.allowed) throw new ApiError("RATE_LIMITED", "Too many requests. Please try again shortly.");
     const { slug } = await context.params;
     const now = new Date();
+    const { prisma } = await import("@/lib/prisma");
     const campaign = await prisma.offerCampaign.findFirst({
       where: {
         slug,

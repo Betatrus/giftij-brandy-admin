@@ -13,16 +13,6 @@ import {
   getClientIp,
 } from "@/lib/api/rate-limit";
 import { checkoutInitializeSchema } from "@/lib/validators/public/checkout";
-import { resolveCartLines } from "@/lib/orders/resolve-cart";
-import {
-  attachPaymentReferenceToReservation,
-  releaseCheckoutReservation,
-  releaseExpiredCheckoutReservations,
-  reserveStockForCheckout,
-  StockReservationUnavailableError,
-  OfferCampaignUnavailableError,
-} from "@/lib/orders/stock-reservation";
-import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 
 export async function POST(
   req: NextRequest,
@@ -36,6 +26,7 @@ export async function POST(
 
   let reservationAttachedToPaystack =
     false;
+  let reservationService: typeof import("@/lib/orders/stock-reservation") | null = null;
 
   try {
     const ip =
@@ -60,6 +51,10 @@ export async function POST(
         await req.json(),
       );
 
+    // Load database-backed checkout services only when a request is executing.
+    reservationService = await import("@/lib/orders/stock-reservation");
+    const { resolveCartLines } = await import("@/lib/orders/resolve-cart");
+
     // Preserve the existing fullName field in stored order/shipping data while
     // collecting first and last name separately in the storefront form.
     const shippingAddress = {
@@ -81,7 +76,7 @@ export async function POST(
      * unlimited cleanup job.
      */
     try {
-      await releaseExpiredCheckoutReservations(
+      await reservationService.releaseExpiredCheckoutReservations(
         25,
       );
     } catch (
@@ -123,7 +118,7 @@ export async function POST(
       const campaignIds = [...new Set(resolved.map((line) => line.offerCampaignId).filter((id): id is string => Boolean(id)))];
       if (campaignIds.length > 1) throw new ApiError("VALIDATION_ERROR", "A checkout can use only one Offer Campaign at a time.");
       const reservation =
-        await reserveStockForCheckout(
+        await reservationService.reserveStockForCheckout(
           resolved,
           campaignIds[0] ?? null,
         );
@@ -133,8 +128,9 @@ export async function POST(
     } catch (error) {
       if (
         error instanceof
-        StockReservationUnavailableError
+        reservationService.StockReservationUnavailableError
       ) {
+        const { getCustomerCareWhatsApp } = await import("@/lib/config/customer-care");
         const customerCareWhatsApp =
           await getCustomerCareWhatsApp();
 
@@ -284,7 +280,7 @@ export async function POST(
       );
     }
 
-    await attachPaymentReferenceToReservation(
+    await reservationService.attachPaymentReferenceToReservation(
       reservationId,
       paystackJson.data.reference,
     );
@@ -310,7 +306,7 @@ export async function POST(
       origin,
     );
   } catch (error) {
-    if (error instanceof OfferCampaignUnavailableError) {
+    if (reservationService && error instanceof reservationService.OfferCampaignUnavailableError) {
       return withCors(fail(new ApiError("OFFER_UNAVAILABLE", "This offer has just ended or reached its qualifying-order limit. Please refresh the campaign page.")), origin);
     }
     /**
@@ -322,9 +318,9 @@ export async function POST(
       !reservationAttachedToPaystack
     ) {
       try {
-        await releaseCheckoutReservation(
-          reservationId,
-        );
+        if (reservationService) {
+          await reservationService.releaseCheckoutReservation(reservationId);
+        }
       } catch (
         releaseError
       ) {

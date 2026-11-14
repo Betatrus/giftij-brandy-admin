@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { unstable_cache } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import {
   ok,
   fail,
@@ -36,6 +35,7 @@ const getCachedProduct =
        * A DRAFT/ARCHIVED product must behave exactly like a nonexistent
        * product and must never reveal that it exists.
        */
+      const { prisma } = await import("@/lib/prisma");
       const row =
         await prisma.product.findFirst({
           where: {

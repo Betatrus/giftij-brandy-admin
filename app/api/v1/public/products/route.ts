@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { unstable_cache } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import {
   ok,
   fail,
@@ -20,7 +19,6 @@ import {
   storefrontUnauthorizedResponse,
 } from "@/lib/api/storefront-auth";
 import { productListQuerySchema } from "@/lib/validators/public/products";
-import { featuredFlagsProvider } from "@/lib/collections/featured-flags-provider";
 import {
   getPagination,
   getPageCount,
@@ -59,6 +57,10 @@ const getCachedProductList = unstable_cache(
     page: number;
     pageSize: number;
   }) => {
+    const [{ prisma }, { featuredFlagsProvider }] = await Promise.all([
+      import("@/lib/prisma"),
+      import("@/lib/collections/featured-flags-provider"),
+    ]);
     const {
       skip,
       take,

@@ -4,7 +4,6 @@ import { ApiError } from "@/lib/api/api-error";
 import { withCors, corsPreflight } from "@/lib/api/cors";
 import { checkRateLimit, getClientIp } from "@/lib/api/rate-limit";
 import { orderStatusQuerySchema } from "@/lib/validators/public/checkout";
-import { prisma } from "@/lib/prisma";
 
 /**
  * The storefront polls this after Paystack redirects back to
@@ -33,6 +32,7 @@ export async function GET(req: NextRequest) {
 
     const { reference } = orderStatusQuerySchema.parse(Object.fromEntries(req.nextUrl.searchParams));
 
+    const { prisma } = await import("@/lib/prisma");
     const order = await prisma.order.findFirst({
       where: { paymentReference: reference },
       select: { orderNumber: true, status: true, stockUnavailable: true, createdAt: true },
