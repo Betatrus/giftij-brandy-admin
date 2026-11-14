@@ -1,13 +1,15 @@
 import { NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { ok, fail } from "@/lib/api/respond";
 import { withCors, corsPreflight } from "@/lib/api/cors";
 import { hasValidStorefrontKey, storefrontUnauthorizedResponse } from "@/lib/api/storefront-auth";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   const origin = req.headers.get("origin");
   if (!hasValidStorefrontKey(req)) return withCors(storefrontUnauthorizedResponse(), origin);
   try {
+    const { prisma } = await import("@/lib/prisma");
     const { slug } = await params;
     const now = new Date();
     const post = await prisma.blogPost.findFirst({
