@@ -1,12 +1,16 @@
 import { PrismaClient } from "@prisma/client";
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+type PrismaGlobal = typeof globalThis & { prisma?: PrismaClient };
+const globalForPrisma = globalThis as PrismaGlobal;
+let localPrisma: PrismaClient | undefined;
 
 /**
- * Preview deployments must never fall back to the Admin Production database.
- * The Vercel Neon integration exposes the isolated staging connection under
- * PREVIEW_DATABASE_URL. Production and local development continue to use
- * DATABASE_URL.
+ * Resolve the database URL only when a real server operation first accesses
+ * Prisma. Merely importing this module during Next.js build analysis must not
+ * require database environment variables.
+ *
+ * Preview deployments are intentionally isolated: they must use
+ * PREVIEW_DATABASE_URL and may never fall back to DATABASE_URL.
  */
 function resolveDatabaseUrl(): string {
   if (process.env.VERCEL_ENV === "preview") {
@@ -30,33 +34,55 @@ function resolveDatabaseUrl(): string {
   return databaseUrl;
 }
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+function getPrismaClient(): PrismaClient {
+  const cached =
+    process.env.NODE_ENV === "production"
+      ? localPrisma
+      : globalForPrisma.prisma ?? localPrisma;
+
+  if (cached) return cached;
+
+  const client = new PrismaClient({
     datasources: {
       db: {
         url: resolveDatabaseUrl(),
       },
     },
-    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
-    // Prisma's defaults (maxWait: 2000ms, timeout: 5000ms) assume
-    // low-latency, always-warm connections. Against Neon (serverless
-    // Postgres, pooled connections, occasional cold-start latency per
-    // round trip), those defaults left no headroom — see the
-    // adjustStock/adjustVariantStock transactions in
-    // lib/actions/inventory.ts, which are already the minimum possible
-    // 2 operations (the stock update + its VariantInventoryLog/
-    // InventoryLog entry, kept atomic) and have no further scope left to
-    // cut. maxWait (time allowed to acquire a transaction) and timeout
-    // (time allowed for the transaction to run) are both raised
-    // modestly — enough to absorb normal Neon round-trip variance, not
-    // large enough to mask a genuinely runaway transaction. This is a
-    // global default; individual $transaction() calls can still pass
-    // their own { maxWait, timeout } to override it where truly needed.
+    log:
+      process.env.NODE_ENV === "development"
+        ? ["query", "error", "warn"]
+        : ["error"],
     transactionOptions: {
       maxWait: 10_000,
       timeout: 15_000,
     },
   });
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+  localPrisma = client;
+  if (process.env.NODE_ENV !== "production") {
+    globalForPrisma.prisma = client;
+  }
+
+  return client;
+}
+
+/**
+ * A typed lazy facade preserves the existing Prisma call sites while
+ * postponing client construction until a delegate or client method is used.
+ * Function properties are bound to the real PrismaClient so methods such as
+ * $transaction retain their expected receiver.
+ */
+export const prisma = new Proxy({} as PrismaClient, {
+  get(_target, property) {
+    const client = getPrismaClient();
+    const value = Reflect.get(client, property, client);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
+  set(_target, property, value) {
+    const client = getPrismaClient();
+    return Reflect.set(client, property, value, client);
+  },
+  has(_target, property) {
+    return property in getPrismaClient();
+  },
+});
