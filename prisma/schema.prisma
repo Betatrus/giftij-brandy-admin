@@ -628,6 +628,10 @@ model OfferSet {
   sortOrder   Int               @default(0)
   isEnabled   Boolean           @default(true)
   products    OfferSetProduct[]
+  checkoutReservations CheckoutReservation[]
+  maxQualifyingOrders Int?
+  qualifyingOrdersCount Int @default(0)
+  reservedQualifyingOrders Int @default(0)
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
 
@@ -774,6 +778,8 @@ model CheckoutReservation {
   cart             Json
   offerCampaignId  String?
   offerCampaign    OfferCampaign?             @relation(fields: [offerCampaignId], references: [id], onDelete: SetNull)
+  offerSetId       String?
+  offerSet         OfferSet?                  @relation(fields: [offerSetId], references: [id], onDelete: SetNull)
   expiresAt        DateTime
   consumedAt       DateTime?
   releasedAt       DateTime?
@@ -782,5 +788,6 @@ model CheckoutReservation {
 
   @@index([status, expiresAt])
   @@index([offerCampaignId])
+  @@index([offerSetId])
   @@index([createdAt])
 }
