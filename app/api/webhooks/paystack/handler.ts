@@ -964,6 +964,11 @@ async function handleChargeFailed(
               ),
       },
     });
+
+    // Keep the webhook retryable. A failed release must not be acknowledged
+    // as processed; Paystack can redeliver while the expiry worker remains a
+    // second safety net for the ten-minute reservation deadline.
+    throw releaseError;
   }
 
   const email =
