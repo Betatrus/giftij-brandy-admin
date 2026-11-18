@@ -30,6 +30,8 @@ export default async function EditProductPage({
     price: number;
     costPrice?: number;
     discount: number | null;
+    discountType: "PERCENTAGE" | "FIXED";
+    discountAmount: number | null;
     currency: string;
     weight: number | null;
     dimensions: string | null;
@@ -57,6 +59,8 @@ export default async function EditProductPage({
     price: product.price,
     costPrice: product.costPrice ?? 0,
     discount: product.discount,
+    discountType: product.discountType,
+    discountAmount: product.discountAmount,
     currency: product.currency,
     weight: product.weight,
     dimensions: product.dimensions,
