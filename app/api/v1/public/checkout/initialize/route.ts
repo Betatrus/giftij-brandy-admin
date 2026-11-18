@@ -76,21 +76,16 @@ export async function POST(
      * unlimited cleanup job.
      */
     try {
-      await reservationService.releaseExpiredCheckoutReservations(
-        25,
+      // Release a bounded batch before checking availability. If cleanup
+      // cannot complete, fail closed rather than reject a customer because
+      // expired reservations are still holding inventory.
+      await reservationService.releaseExpiredCheckoutReservations(100);
+    } catch (cleanupError) {
+      console.error("Expired reservation cleanup failed; checkout admission stopped:", cleanupError);
+      throw new ApiError(
+        "SERVICE_UNAVAILABLE",
+        "We’re refreshing stock availability. Please try checkout again shortly.",
       );
-    } catch (
-      cleanupError
-    ) {
-      console.error(
-        "Expired reservation cleanup failed:",
-        cleanupError,
-      );
-
-      /**
-       * Do not block a legitimate checkout merely because cleanup failed.
-       * PostgreSQL reservation rules still protect current inventory.
-       */
     }
 
     /**
