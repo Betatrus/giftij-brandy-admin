@@ -103,6 +103,9 @@ export async function createOfferSet(formData: FormData) {
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
     throw new Error("Offer Set order limit must be a positive whole number.");
   }
+  if (maxQualifyingOrders !== null && maxQualifyingOrders < existing.qualifyingOrdersCount + existing.reservedQualifyingOrders) {
+    throw new Error("The Offer Set limit cannot be lower than paid orders plus active reserved slots.");
+  }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
@@ -147,7 +150,9 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true } } } });
   if (!campaign) throw new Error("Campaign not found.");
   if (status === "PUBLISHED" && !campaign.offerSets.length) throw new Error("Add at least one enabled Offer Set before publishing.");
-  if (status === "PUBLISHED" && !campaign.activeOfferSetId) throw new Error("Choose the Offer Set customers should see before publishing.");
+  if (status === "PUBLISHED" && (!campaign.activeOfferSetId || !campaign.offerSets.some((set) => set.id === campaign.activeOfferSetId))) {
+    throw new Error("Choose an enabled Offer Set customers should see before publishing.");
+  }
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
   revalidatePath("/admin/marketing");
@@ -163,12 +168,20 @@ export async function updateOfferCampaign(formData: FormData) {
   if (!slug) throw new Error("A valid campaign URL slug is required.");
   const duplicate = await prisma.offerCampaign.findFirst({ where: { slug, id: { not: id } }, select: { id: true } });
   if (duplicate) throw new Error("That campaign URL is already in use.");
+  const existingCampaign = await prisma.offerCampaign.findUnique({
+    where: { id },
+    select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+  });
+  if (!existingCampaign) throw new Error("Campaign not found.");
   const startsAt = optionalDate(formData.get("startsAt"), "Start date");
   const endsAt = optionalDate(formData.get("endsAt"), "End date");
   if (startsAt && endsAt && endsAt <= startsAt) throw new Error("End date must be after the start date.");
   const maxRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
   const maxQualifyingOrders = maxRaw ? Number(maxRaw) : null;
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
+  if (maxQualifyingOrders !== null && maxQualifyingOrders < existingCampaign.qualifyingOrdersCount + existingCampaign.reservedQualifyingOrders) {
+    throw new Error("The campaign limit cannot be lower than paid orders plus active reserved slots.");
+  }
   const creative = await resolveCampaignCreative(formData);
   await prisma.offerCampaign.update({ where: { id }, data: {
     title, slug, description: String(formData.get("description") ?? "").trim() || null,
@@ -189,7 +202,10 @@ export async function updateOfferSet(formData: FormData) {
   const title = clean(formData.get("title"), "Offer Set title", 100);
   const productIds = Array.from(new Set(formData.getAll("productIds").map(String).filter(Boolean)));
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
-  const existing = await prisma.offerSet.findFirst({ where: { id, campaignId }, select: { id: true } });
+  const existing = await prisma.offerSet.findFirst({
+    where: { id, campaignId },
+    select: { id: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+  });
   if (!existing) throw new Error("Offer Set not found for this campaign.");
   const limitRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
   const maxQualifyingOrders = limitRaw ? Number(limitRaw) : null;
