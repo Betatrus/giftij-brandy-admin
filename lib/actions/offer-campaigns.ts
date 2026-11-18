@@ -147,11 +147,16 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   const id = clean(formData.get("campaignId"), "Campaign", 80);
   const status = String(formData.get("status") ?? "");
   if (!["DRAFT", "PUBLISHED", "PAUSED", "ENDED"].includes(status)) throw new Error("Invalid campaign status.");
-  const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true } } } });
+  const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true, maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true } } } });
   if (!campaign) throw new Error("Campaign not found.");
   if (status === "PUBLISHED" && !campaign.offerSets.length) throw new Error("Add at least one enabled Offer Set before publishing.");
-  if (status === "PUBLISHED" && (!campaign.activeOfferSetId || !campaign.offerSets.some((set) => set.id === campaign.activeOfferSetId))) {
-    throw new Error("Choose an enabled Offer Set customers should see before publishing.");
+  if (status === "PUBLISHED") {
+    const activeSet = campaign.offerSets.find((set) => set.id === campaign.activeOfferSetId);
+    if (!activeSet) throw new Error("Choose an enabled Offer Set customers should see before publishing.");
+    if (activeSet.maxQualifyingOrders !== null &&
+      activeSet.qualifyingOrdersCount + activeSet.reservedQualifyingOrders >= activeSet.maxQualifyingOrders) {
+      throw new Error("The selected Offer Set has reached its order limit. Choose another enabled set before publishing.");
+    }
   }
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
