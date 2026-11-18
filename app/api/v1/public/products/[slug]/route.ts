@@ -118,8 +118,11 @@ export async function GET(
       );
     }
 
+    const { getCustomerCareWhatsApp } = await import("@/lib/config/customer-care");
+    const customerCareWhatsApp = await getCustomerCareWhatsApp();
+
     return withCors(
-      ok(product),
+      ok({ ...product, customerCareWhatsApp }),
       origin
     );
   } catch (error) {
