@@ -4,7 +4,7 @@ import { ApiError } from "@/lib/api/api-error";
 import { withCors, corsPreflight } from "@/lib/api/cors";
 import { checkRateLimit, getClientIp } from "@/lib/api/rate-limit";
 import { hasValidStorefrontKey, storefrontUnauthorizedResponse } from "@/lib/api/storefront-auth";
-import { computeEffectivePrice } from "@/lib/pricing/effective-price";
+import { computePriceAfterDiscount } from "@/lib/pricing/effective-price";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ slug: string }> }) {
   const origin = req.headers.get("origin");
@@ -53,8 +53,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         products: {
           orderBy: { createdAt: "asc" },
           select: {
-            discountPercent: true, freeDelivery: true, giftDescription: true,
-            product: { select: { id: true, slug: true, name: true, price: true, discount: true, status: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, altText: true } } } },
+            discountPercent: true, discountAmount: true, freeDelivery: true, giftDescription: true,
+            product: { select: { id: true, slug: true, name: true, price: true, discount: true, discountType: true, discountAmount: true, status: true, images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, altText: true } } } },
           },
         },
       },
@@ -63,12 +63,24 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     const products = offerSet.products.filter((item) => item.product && item.product.status === "ACTIVE").map((item) => {
       const basePrice = Number(item.product.price);
       const discountPercent = item.discountPercent === null ? null : Number(item.discountPercent);
+      const discountAmount = item.discountAmount === null ? null : Number(item.discountAmount);
+      const productDiscount = {
+        type: item.product.discountType as "PERCENTAGE" | "FIXED",
+        percent: Number(item.product.discount ?? 0),
+        amount: item.product.discountAmount === null ? null : Number(item.product.discountAmount),
+      };
+      const offerDiscount = discountPercent !== null
+        ? { type: "PERCENTAGE" as const, percent: discountPercent }
+        : discountAmount !== null
+          ? { type: "FIXED" as const, amount: discountAmount }
+          : productDiscount;
       return {
         slug: item.product.slug,
         name: item.product.name,
         basePrice,
-        offerPrice: discountPercent === null ? computeEffectivePrice(basePrice, Number(item.product.discount ?? 0)) : computeEffectivePrice(basePrice, discountPercent),
+        offerPrice: computePriceAfterDiscount(basePrice, offerDiscount),
         discountPercent,
+        discountAmount,
         freeDelivery: item.freeDelivery,
         giftDescription: item.giftDescription,
         image: item.product.images[0]?.url ?? null,
