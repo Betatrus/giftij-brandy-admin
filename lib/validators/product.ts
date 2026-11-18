@@ -73,7 +73,7 @@ export const productSchema = z
 
     price: z.coerce.number().min(0, "Price must be 0 or more"),
     costPrice: z.coerce.number().min(0, "Cost price must be 0 or more"),
-    discount: z.coerce.number().min(0).max(100).optional().nullable(),
+    discount: z.coerce.number().min(0).max(99.99, "Discount must be below 100 percent").optional().nullable(),
     discountType: z.enum(["PERCENTAGE", "FIXED"]).default("PERCENTAGE"),
     discountAmount: z.coerce.number().min(0).optional().nullable(),
 
