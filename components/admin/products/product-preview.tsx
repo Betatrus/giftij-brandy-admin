@@ -40,8 +40,14 @@ export function ProductPreview({
 }) {
   const categoryNames = categories.filter((c) => values.categoryIds?.includes(c.id)).map((c) => c.name);
   const price = Number(values.price) || 0;
-  const discount = Number(values.discount) || 0;
-  const effectivePrice = discount > 0 ? Math.round(price * (1 - discount / 100) * 100) / 100 : price;
+  const discountType = values.discountType ?? "PERCENTAGE";
+  const discount = discountType === "FIXED"
+    ? Number(values.discountAmount) || 0
+    : Number(values.discount) || 0;
+  const effectivePrice = discountType === "FIXED"
+    ? Math.max(0, Math.round((price - discount) * 100) / 100)
+    : Math.round(price * (1 - discount / 100) * 100) / 100;
+  const hasDiscount = discount > 0;
   const images = existingImages ?? [];
   const staged = stagedImages ?? [];
 
@@ -98,12 +104,12 @@ export function ProductPreview({
           </div>
 
           <div className="flex items-baseline gap-3">
-            {discount > 0 ? (
+            {hasDiscount ? (
               <>
                 <span className="font-display text-lg text-ink">₦{effectivePrice.toLocaleString()}</span>
                 <span className="font-body text-sm text-ink/40 line-through">₦{price.toLocaleString()}</span>
                 <span className="font-body text-xs text-green-700 bg-green-50 rounded-full px-2 py-0.5">
-                  {discount}% off
+                  {discountType === "FIXED" ? `₦${discount.toLocaleString()} off` : `${discount}% off`}
                 </span>
               </>
             ) : (
