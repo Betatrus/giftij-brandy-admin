@@ -98,23 +98,25 @@ export async function createOfferSet(formData: FormData) {
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
   const campaign = await prisma.offerCampaign.findUnique({ where: { id: campaignId }, select: { id: true } });
   if (!campaign) throw new Error("Campaign not found.");
-  const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true } });
+  const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
+  const amountRaw = String(formData.get("discountAmount") ?? "").trim();
   const discountPercent = discountRaw ? Number(discountRaw) : null;
-  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)) {
-    throw new Error("Discount must be greater than 0 and no more than 100 percent.");
+  const discountAmount = amountRaw ? Number(amountRaw) : null;
+  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)) throw new Error("Discount must be greater than 0 and no more than 100 percent.");
+  if (discountPercent !== null && discountAmount !== null) throw new Error("Choose either a percentage or fixed discount, not both.");
+  if (discountAmount !== null && (!Number.isFinite(discountAmount) || discountAmount <= 0 || products.some((product) => discountAmount >= Number(product.price)))) {
+    throw new Error("Fixed discount must be greater than zero and below the selling price of every selected product.");
   }
   const freeDelivery = formData.get("freeDelivery") === "on";
   const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
-  if (discountPercent === null && !freeDelivery && !giftDescription) {
-    throw new Error("Add at least one benefit: discount, free delivery, or gift.");
-  }
+  if (discountPercent === null && discountAmount === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit: percentage discount, fixed discount, free delivery, or gift.");
   const maxSort = await prisma.offerSet.aggregate({ where: { campaignId }, _max: { sortOrder: true } });
   const offerSet = await prisma.offerSet.create({ data: {
     campaignId, title, description: String(formData.get("description") ?? "").trim() || null,
     sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
-    products: { create: productIds.map((productId) => ({ productId, discountPercent, freeDelivery, giftDescription })) },
+    products: { create: productIds.map((productId) => ({ productId, discountPercent, discountAmount, freeDelivery, giftDescription })) },
   }});
   await logActivity({ userId: session.user.id, action: "OFFER_SET_CREATED", resource: `OfferSet:${offerSet.id}`, metadata: { campaignId, title, productCount: productIds.length } });
   revalidatePath("/admin/marketing");
@@ -183,18 +185,24 @@ export async function updateOfferSet(formData: FormData) {
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
   const existing = await prisma.offerSet.findFirst({ where: { id, campaignId }, select: { id: true } });
   if (!existing) throw new Error("Offer Set not found for this campaign.");
-  const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true } });
+  const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
+  const amountRaw = String(formData.get("discountAmount") ?? "").trim();
   const discountPercent = discountRaw ? Number(discountRaw) : null;
+  const discountAmount = amountRaw ? Number(amountRaw) : null;
   if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)) throw new Error("Discount must be greater than 0 and no more than 100 percent.");
+  if (discountPercent !== null && discountAmount !== null) throw new Error("Choose either a percentage or fixed discount, not both.");
+  if (discountAmount !== null && (!Number.isFinite(discountAmount) || discountAmount <= 0 || products.some((product) => discountAmount >= Number(product.price)))) {
+    throw new Error("Fixed discount must be greater than zero and below the selling price of every selected product.");
+  }
   const freeDelivery = formData.get("freeDelivery") === "on";
   const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
-  if (discountPercent === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit: discount, free delivery, or gift.");
+  if (discountPercent === null && discountAmount === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit: percentage discount, fixed discount, free delivery, or gift.");
   await prisma.$transaction(async (tx) => {
     await tx.offerSet.update({ where: { id }, data: { title, description: String(formData.get("description") ?? "").trim() || null } });
     await tx.offerSetProduct.deleteMany({ where: { offerSetId: id } });
-    await tx.offerSetProduct.createMany({ data: productIds.map((productId) => ({ offerSetId: id, productId, discountPercent, freeDelivery, giftDescription })) });
+    await tx.offerSetProduct.createMany({ data: productIds.map((productId) => ({ offerSetId: id, productId, discountPercent, discountAmount, freeDelivery, giftDescription })) });
   });
   await logActivity({ userId: session.user.id, action: "OFFER_SET_UPDATED", resource: `OfferSet:${id}`, metadata: { campaignId, title, productCount: productIds.length } });
   revalidatePath("/admin/marketing");
