@@ -160,6 +160,16 @@ export async function POST(
         amountNaira * 100,
       );
 
+    // This checkout flow always uses Paystack. Do not send zero-value or
+    // unsafe amounts to the provider; release the reservation in the catch
+    // path below if the cart has no payable balance.
+    if (!Number.isSafeInteger(amountKobo) || amountKobo <= 0) {
+      throw new ApiError(
+        "VALIDATION_ERROR",
+        "Your cart total must be greater than zero to continue to payment.",
+      );
+    }
+
     const secretKey =
       process.env
         .PAYSTACK_SECRET_KEY;
