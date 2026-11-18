@@ -713,7 +713,10 @@ async function main() {
       data: { fromSlug: `preview-old-${suffix}`, postId: published.id },
     });
 
-    const origin = process.env.STOREFRONT_URL ?? "https://storefront-preview.invalid";
+    // This test checks CORS behaviour with a safe synthetic Preview origin.
+    // It must never inherit a project-level storefront URL that could point
+    // at the live storefront.
+    const origin = "https://storefront-preview.invalid";
     const headers = { "X-Storefront-Key": storefrontSecret, origin };
     const listResponse = await publicBlog(new NextRequest("https://admin-preview.invalid/api/v1/public/blog", { headers }));
     assert.equal(listResponse.status, 200);
