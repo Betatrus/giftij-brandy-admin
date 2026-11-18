@@ -60,6 +60,7 @@ type PaystackWebhookEvent = {
         variantId?: string;
         quantity: number;
         unitPrice?: number;
+        offerSetId?: string | null;
       }[];
 
       shippingAddress?: Record<
