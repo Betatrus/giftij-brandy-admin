@@ -28,7 +28,7 @@ async function requireSession() {
 function serializeProductForClient<T extends Record<string, unknown>>(record: T): T {
   const plain = { ...record } as Record<string, unknown>;
 
-  for (const field of ["price", "costPrice", "discount"] as const) {
+  for (const field of ["price", "costPrice", "discount", "discountAmount"] as const) {
     if (field in plain && plain[field] != null) {
       plain[field] = Number(plain[field]);
     }
@@ -184,7 +184,9 @@ export async function createProduct(input: ProductInput) {
       barcode: parsed.barcode ?? null,
       price: parsed.price,
       costPrice,
-      discount: parsed.discount ?? 0,
+      discount: parsed.discountType === "PERCENTAGE" ? parsed.discount ?? 0 : 0,
+      discountType: parsed.discountType,
+      discountAmount: parsed.discountType === "FIXED" ? parsed.discountAmount ?? null : null,
       currency: parsed.currency,
       weight: parsed.weight ?? null,
       dimensions: parsed.dimensions ?? null,
@@ -344,7 +346,9 @@ export async function updateProduct(id: string, input: ProductInput) {
         barcode: parsed.barcode ?? null,
         price: parsed.price,
         costPrice: canEditFinancials ? parsed.costPrice : existing.costPrice,
-        discount: parsed.discount ?? 0,
+        discount: parsed.discountType === "PERCENTAGE" ? parsed.discount ?? 0 : 0,
+        discountType: parsed.discountType,
+        discountAmount: parsed.discountType === "FIXED" ? parsed.discountAmount ?? null : null,
         currency: parsed.currency,
         weight: parsed.weight ?? null,
         dimensions: parsed.dimensions ?? null,
