@@ -103,9 +103,6 @@ export async function createOfferSet(formData: FormData) {
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
     throw new Error("Offer Set order limit must be a positive whole number.");
   }
-  if (maxQualifyingOrders !== null && maxQualifyingOrders < existing.qualifyingOrdersCount + existing.reservedQualifyingOrders) {
-    throw new Error("The Offer Set limit cannot be lower than paid orders plus active reserved slots.");
-  }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
@@ -223,6 +220,9 @@ export async function updateOfferSet(formData: FormData) {
   const maxQualifyingOrders = limitRaw ? Number(limitRaw) : null;
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
     throw new Error("Offer Set order limit must be a positive whole number.");
+  }
+  if (maxQualifyingOrders !== null && maxQualifyingOrders < existing.qualifyingOrdersCount + existing.reservedQualifyingOrders) {
+    throw new Error("The Offer Set limit cannot be lower than paid orders plus active reserved slots.");
   }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
