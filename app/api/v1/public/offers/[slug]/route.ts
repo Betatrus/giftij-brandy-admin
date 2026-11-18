@@ -28,7 +28,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     // A published campaign that has ended or exhausted its order cap should
     // render a real customer-facing expired page instead of a generic 404.
     // Future campaigns remain unavailable until their scheduled start.
-    if (campaign.startsAt && campaign.startsAt > now) {
+    if (campaign.status !== "ENDED" && campaign.startsAt && campaign.startsAt > now) {
       throw new ApiError("NOT_FOUND", "This offer has not started yet.");
     }
     const reachedOrderLimit = campaign.maxQualifyingOrders !== null &&
