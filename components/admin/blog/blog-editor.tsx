@@ -35,13 +35,14 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
   const [featured, setFeatured] = useState(post?.isFeatured ?? false);
   const [indexable, setIndexable] = useState(post?.isIndexable ?? false);
   const [uploading, setUploading] = useState(false);
+  const [activePostId, setActivePostId] = useState(post?.id ?? "");
 
   function submit(intent: "DRAFT" | "PUBLISH") {
     setError("");
     startTransition(async () => {
       try {
         await saveBlogPost({
-          id: post?.id, title, slug, excerpt, contentMarkdown: content, type,
+          id: activePostId || post?.id, title, slug, excerpt, contentMarkdown: content, type,
           categoryId, tags, coverImageUrl, coverImageAlt, seoTitle, seoDescription,
           canonicalUrl, isFeatured: featured, isIndexable: indexable, intent,
         });
@@ -54,15 +55,28 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
   async function uploadCover(file?: File) {
     if (!file) return;
     if (!file.type.startsWith("image/") || file.size > 8 * 1024 * 1024) { setError("Choose an image file up to 8 MB."); return; }
-    if (!post?.id) { setError("Save the article as a draft before uploading its cover image."); return; }
     setError(""); setUploading(true);
     try {
+      // New articles need a database ID before a Cloudinary asset can be
+      // attached. Save the current form as a draft automatically instead of
+      // blocking the upload control until the user manually saves first.
+      let postId = activePostId || post?.id || "";
+      if (!postId) {
+        const created = await saveBlogPost({
+          title, slug, excerpt, contentMarkdown: content, type,
+          categoryId, tags, coverImageUrl, coverImageAlt, seoTitle, seoDescription,
+          canonicalUrl, isFeatured: featured, isIndexable: indexable, intent: "DRAFT",
+        });
+        postId = created.id;
+        setActivePostId(postId);
+      }
+
       const signed = await getBlogCloudinaryUploadSignature();
       const body = new FormData(); body.append("file", file); body.append("api_key", signed.apiKey); body.append("timestamp", String(signed.timestamp)); body.append("folder", signed.folder); body.append("signature", signed.signature);
       const response = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(signed.cloudName)}/image/upload`, { method: "POST", body });
       const payload = await response.json();
       if (!response.ok || typeof payload.public_id !== "string") throw new Error(payload?.error?.message || "Image upload failed.");
-      const saved = await attachBlogCoverImage({ postId: post.id, cloudinaryId: payload.public_id });
+      const saved = await attachBlogCoverImage({ postId, cloudinaryId: payload.public_id });
       setCoverImageUrl(saved.url || "");
     } catch (e) { setError(e instanceof Error ? e.message : "Could not upload cover image."); }
     finally { setUploading(false); }
@@ -95,7 +109,7 @@ export function BlogEditor({ categories, post }: { categories: Category[]; post?
     <section className="rounded-2xl bg-white p-5 md:p-6 shadow-soft space-y-4">
       <div><label className={labelClass}>Article body (Markdown) *</label><textarea className={inputClass+" min-h-[420px] font-mono text-sm"} value={content} onChange={e=>setContent(e.target.value)} placeholder={"# Introduction\n\nWrite useful, original content here..."} required /></div>
       <div className="grid gap-4 md:grid-cols-2">
-        <div><label className={labelClass}>Cover image URL</label><input className={inputClass} type="url" value={coverImageUrl} onChange={e=>setCoverImageUrl(e.target.value)} placeholder="https://..." /><label className="mt-2 block text-xs text-ink/50">Or upload an image (up to 8 MB) {post?.id ? "" : "after saving the draft"}</label><input className="mt-1 block w-full text-xs" type="file" accept="image/*" disabled={uploading || !post?.id} onChange={e=>uploadCover(e.target.files?.[0])} />{uploading&&<p className="mt-1 text-xs text-ink/50">Uploading cover image...</p>}</div>
+        <div><label className={labelClass}>Cover image URL</label><input className={inputClass} type="url" value={coverImageUrl} onChange={e=>setCoverImageUrl(e.target.value)} placeholder="https://..." /><label className="mt-2 block text-xs text-ink/50">Or upload an image (up to 8 MB). A new article will be saved as a draft automatically before its image is attached.</label><input className="mt-1 block w-full text-xs" type="file" accept="image/*" disabled={uploading} onChange={e=>{const file=e.target.files?.[0];void uploadCover(file);e.target.value="";}} />{uploading&&<p className="mt-1 text-xs text-ink/50">Saving draft and uploading cover image...</p>}</div>
         <div><label className={labelClass}>Cover image alt text</label><input className={inputClass} value={coverImageAlt} onChange={e=>setCoverImageAlt(e.target.value)} maxLength={180} /></div>
       </div>
       <p className="text-xs text-ink/45">Use an HTTPS image URL. Add descriptive alt text; avoid keyword stuffing.</p>
