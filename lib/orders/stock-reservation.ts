@@ -404,6 +404,7 @@ async function reserveLine(
 export async function reserveStockForCheckout(
   lines: CartLine[],
   offerCampaignId: string | null = null,
+  offerSetId: string | null = null,
 ): Promise<{
   reservationId: string;
   expiresAt: Date;
@@ -457,7 +458,8 @@ export async function reserveStockForCheckout(
       }
 
       if (offerCampaignId) {
-        // One qualifying-order slot is claimed atomically with the stock reservation.
+        // One campaign-wide qualifying-order slot is claimed atomically with stock.
+        // PostgreSQL serializes concurrent checkouts against this campaign row.
         // PostgreSQL serializes concurrent checkouts against this campaign row.
         const slotClaimed = await tx.$executeRaw`
           UPDATE "OfferCampaign"
@@ -477,6 +479,23 @@ export async function reserveStockForCheckout(
         }
       }
 
+      if (offerSetId) {
+        if (!offerCampaignId) throw new OfferCampaignUnavailableError();
+        const setSlotClaimed = await tx.$executeRaw`
+          UPDATE "OfferSet"
+          SET "reservedQualifyingOrders" = "reservedQualifyingOrders" + 1,
+              "updatedAt" = NOW()
+          WHERE "id" = ${offerSetId}
+            AND "campaignId" = ${offerCampaignId}
+            AND "isEnabled" = TRUE
+            AND (
+              "maxQualifyingOrders" IS NULL
+              OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
+            )
+        `;
+        if (setSlotClaimed !== 1) throw new OfferCampaignUnavailableError();
+      }
+
       const reservation =
         await tx.checkoutReservation.create(
           {
@@ -488,6 +507,7 @@ export async function reserveStockForCheckout(
                 normalized as Prisma.InputJsonValue,
 
               offerCampaignId,
+              offerSetId,
               expiresAt,
             },
 
@@ -570,6 +590,7 @@ export async function releaseCheckoutReservation(
               cart: true,
               paymentReference: true,
               offerCampaignId: true,
+              offerSetId: true,
             },
           },
         );
@@ -624,6 +645,13 @@ export async function releaseCheckoutReservation(
           data: { reservedQualifyingOrders: { decrement: 1 } },
         });
         if (slotReleased.count !== 1) throw new Error("Unable to release the reserved campaign order slot.");
+      }
+      if (reservation.offerSetId) {
+        const setSlotReleased = await tx.offerSet.updateMany({
+          where: { id: reservation.offerSetId, reservedQualifyingOrders: { gt: 0 } },
+          data: { reservedQualifyingOrders: { decrement: 1 } },
+        });
+        if (setSlotReleased.count !== 1) throw new Error("Unable to release the reserved Offer Set order slot.");
       }
 
       await restoreReservationCartLines(
@@ -707,6 +735,7 @@ export async function consumeCheckoutReservation(
           cart: true,
           expiresAt: true,
           offerCampaignId: true,
+          offerSetId: true,
         },
       },
     );
@@ -717,6 +746,7 @@ export async function consumeCheckoutReservation(
       cart: [],
       reservationId: null,
       offerCampaignId: null,
+      offerSetId: null,
     };
   }
 
@@ -735,6 +765,7 @@ export async function consumeCheckoutReservation(
         lines,
       reservationId: reservation.id,
       offerCampaignId: reservation.offerCampaignId,
+      offerSetId: reservation.offerSetId,
     };
   }
 
@@ -775,6 +806,13 @@ export async function consumeCheckoutReservation(
           data: { reservedQualifyingOrders: { decrement: 1 } },
         });
         if (slotReleased.count !== 1) throw new Error("Unable to release expired campaign order slot.");
+      }
+      if (reservation.offerSetId) {
+        const setSlotReleased = await tx.offerSet.updateMany({
+          where: { id: reservation.offerSetId, reservedQualifyingOrders: { gt: 0 } },
+          data: { reservedQualifyingOrders: { decrement: 1 } },
+        });
+        if (setSlotReleased.count !== 1) throw new Error("Unable to release expired Offer Set order slot.");
       }
       await restoreReservationCartLines(
         tx,
@@ -832,6 +870,16 @@ export async function consumeCheckoutReservation(
       },
     });
     if (slotConsumed.count !== 1) throw new Error("Unable to consume the reserved campaign order slot.");
+  }
+  if (reservation.offerSetId) {
+    const setSlotConsumed = await tx.offerSet.updateMany({
+      where: { id: reservation.offerSetId, reservedQualifyingOrders: { gt: 0 } },
+      data: {
+        reservedQualifyingOrders: { decrement: 1 },
+        qualifyingOrdersCount: { increment: 1 },
+      },
+    });
+    if (setSlotConsumed.count !== 1) throw new Error("Unable to consume the reserved Offer Set order slot.");
   }
 
   for (const line of lines) {
