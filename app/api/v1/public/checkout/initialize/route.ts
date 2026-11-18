@@ -201,6 +201,10 @@ export async function POST(
               "application/json",
           },
 
+          // A provider timeout must release the reservation through the catch
+          // path rather than leave a customer waiting on an open request.
+          signal: AbortSignal.timeout(10_000),
+
           body: JSON.stringify({
             email:
               body.email,
@@ -271,7 +275,13 @@ export async function POST(
     if (
       !paystackRes.ok ||
       !paystackJson?.status ||
-      !paystackJson.data
+      !paystackJson.data ||
+      typeof paystackJson.data.authorization_url !== "string" ||
+      !paystackJson.data.authorization_url.startsWith("https://") ||
+      typeof paystackJson.data.access_code !== "string" ||
+      !paystackJson.data.access_code ||
+      typeof paystackJson.data.reference !== "string" ||
+      !paystackJson.data.reference
     ) {
       console.error(
         "Paystack initialize failed:",
