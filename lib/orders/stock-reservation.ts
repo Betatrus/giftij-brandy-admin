@@ -721,6 +721,7 @@ export async function consumeCheckoutReservation(
   cart: ReservationCartLine[];
   reservationId: string | null;
   offerCampaignId: string | null;
+  offerSetId: string | null;
 }> {
   const reservation =
     await tx.checkoutReservation.findUnique(
@@ -779,6 +780,7 @@ export async function consumeCheckoutReservation(
         lines,
       reservationId: reservation.id,
       offerCampaignId: reservation.offerCampaignId,
+      offerSetId: reservation.offerSetId,
     };
   }
 
@@ -827,6 +829,7 @@ export async function consumeCheckoutReservation(
       cart: lines,
       reservationId: reservation.id,
       offerCampaignId: reservation.offerCampaignId,
+      offerSetId: reservation.offerSetId,
     };
   }
 
@@ -858,6 +861,7 @@ export async function consumeCheckoutReservation(
         lines,
       reservationId: reservation.id,
       offerCampaignId: reservation.offerCampaignId,
+      offerSetId: reservation.offerSetId,
     };
   }
 
@@ -1011,6 +1015,7 @@ export async function consumeCheckoutReservation(
       lines,
     reservationId: reservation.id,
     offerCampaignId: reservation.offerCampaignId,
+      offerSetId: reservation.offerSetId,
   };
 }
 
