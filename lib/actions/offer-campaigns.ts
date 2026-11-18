@@ -302,7 +302,6 @@ export async function deleteOfferCampaign(formData: FormData) {
     where: {
       offerCampaignId: campaignId,
       status: "ACTIVE",
-      expiresAt: { gt: new Date() },
     },
   });
   if (
