@@ -12,8 +12,22 @@ const SUPER_ADMIN_ONLY_PREFIXES = ["/admin/staff", "/admin/categories"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
+  const host = req.headers.get("host")?.split(":")[0]?.toLowerCase();
   const isLoggedIn = !!req.auth;
   const isAdminRoute = pathname.startsWith("/admin");
+
+  // The api subdomain is intentionally routed to this project. Its root is
+  // a public, read-only health document; admin routes remain protected below.
+  if (host === "api.giftijbrandy.com" && pathname === "/") {
+    return NextResponse.json({
+      service: "Giftij Brandy API",
+      status: "ok",
+      message: "API is online.",
+      timestamp: new Date().toISOString(),
+    }, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
 
   if (!isAdminRoute) return NextResponse.next();
 
@@ -34,5 +48,5 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/", "/admin/:path*"],
 };
