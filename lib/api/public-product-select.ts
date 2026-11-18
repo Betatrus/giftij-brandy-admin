@@ -48,6 +48,8 @@ export const PUBLIC_PRODUCT_DETAIL_SELECT = {
   brand: true,
   price: true,
   discount: true,
+  discountType: true,
+  discountAmount: true,
   currency: true,
   weight: true,
   dimensions: true,
@@ -126,6 +128,8 @@ interface ProductDetailRowShape {
   brand: string;
   price: unknown;
   discount: unknown;
+  discountType: string;
+  discountAmount: unknown;
   currency: string;
   weight: number | null;
   dimensions: string | null;
@@ -180,6 +184,8 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
     discount: row.discount ? toNumber(row.discount) : null,
     discountType: row.discountType,
     discountAmount: row.discountAmount == null ? null : toNumber(row.discountAmount),
+    discountType: row.discountType,
+    discountAmount: row.discountAmount == null ? null : toNumber(row.discountAmount),
     // Precomputed via the SAME helper the Paystack webhook uses to set
     // OrderItem.unitPrice (lib/pricing/effective-price.ts) — so what
     // the storefront displays as the selling price and what actually
@@ -228,10 +234,13 @@ export function toProductDetailDTO(row: ProductDetailRowShape) {
     brand: row.brand,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
-    discountedPrice: computeEffectivePrice(
-      toNumber(row.price),
-      row.discount ? toNumber(row.discount) : 0
-    ),
+    discountType: row.discountType,
+    discountAmount: row.discountAmount == null ? null : toNumber(row.discountAmount),
+    discountedPrice: computePriceAfterDiscount(toNumber(row.price), {
+      type: row.discountType as "PERCENTAGE" | "FIXED",
+      percent: row.discount ? toNumber(row.discount) : 0,
+      amount: row.discountAmount == null ? null : toNumber(row.discountAmount),
+    }),
     currency: row.currency,
     weight: row.weight,
     dimensions: row.dimensions,
