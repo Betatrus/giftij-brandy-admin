@@ -18,7 +18,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     const campaign = await prisma.offerCampaign.findFirst({
       where: { slug, status: { in: ["PUBLISHED", "ENDED"] } },
       select: {
-        id: true, title: true, slug: true, description: true, announcementHtml: true, creativeImageUrl: true,
+        id: true, title: true, slug: true, status: true, description: true, announcementHtml: true, creativeImageUrl: true,
         ctaText: true, startsAt: true, endsAt: true, maxQualifyingOrders: true,
         qualifyingOrdersCount: true, reservedQualifyingOrders: true, activeOfferSetId: true,
       },
