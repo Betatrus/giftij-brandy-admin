@@ -90,6 +90,8 @@ export function ProductForm({
       variantType: null,
       variants: [],
       initialStock: 0,
+      discountType: "PERCENTAGE",
+      discountAmount: null,
       ...defaultValues,
     },
   });
@@ -104,6 +106,7 @@ export function ProductForm({
   } = form;
 
   const hasVariants = watch("hasVariants");
+  const discountType = watch("discountType");
 
   const { setDirty } = useUnsavedChanges();
 
@@ -370,10 +373,26 @@ export function ProductForm({
             )}
 
             <div>
-              <label className="font-body text-sm text-ink/70">Discount (%)</label>
-              <input type="number" step="0.01" {...register("discount")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+              <label className="font-body text-sm text-ink/70">Discount type</label>
+              <select {...register("discountType")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body">
+                <option value="PERCENTAGE">Percentage (%)</option>
+                <option value="FIXED">Fixed amount (₦)</option>
+              </select>
+              {discountType === "FIXED" ? (
+                <>
+                  <label className="mt-3 block font-body text-sm text-ink/70">Discount amount (₦)</label>
+                  <input type="number" min="0.01" step="0.01" {...register("discountAmount")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+                  {errors.discountAmount && <p className="text-xs text-red-600 mt-1">{errors.discountAmount.message}</p>}
+                </>
+              ) : (
+                <>
+                  <label className="mt-3 block font-body text-sm text-ink/70">Discount (%)</label>
+                  <input type="number" min="0" max="100" step="0.01" {...register("discount")} className="w-full mt-1 rounded-xl border border-cream px-3 py-2 font-body" />
+                  {errors.discount && <p className="text-xs text-red-600 mt-1">{errors.discount.message}</p>}
+                </>
+              )}
               <p className="text-[11px] text-ink/40 font-body mt-1">
-                Customers will see the discounted price automatically — no need to change the price above.
+                Customers will see the discounted price automatically. The discount cannot reduce the price below zero.
               </p>
             </div>
             <div>
