@@ -241,6 +241,10 @@ async function main() {
     throw new Error("Preview integration tests may run only with PREVIEW_DATABASE_URL configured.");
   }
 
+  // Keep every mocked checkout callback and CORS origin inside the isolated
+  // Preview test domain. Never inherit the project's live storefront URL.
+  process.env.STOREFRONT_URL = "https://storefront-preview.invalid";
+
   // Exact ten-minute reservation window and atomic hold/release.
   {
     const productId = await createInventoryProduct("ttl", 5);
