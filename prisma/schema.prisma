@@ -115,6 +115,11 @@ enum ProductStatus {
   ARCHIVED
 }
 
+enum ProductDiscountType {
+  PERCENTAGE
+  FIXED
+}
+
 model Category {
   id          String     @id @default(cuid())
   name        String
@@ -155,6 +160,8 @@ model Product {
   // ("PERCENTAGE" | "FLAT_AMOUNT" | ...) alongside this field rather than
   // repurposing it — documented here so the future expansion path is clear.
   discount       Decimal? @db.Decimal(5, 2) @default(0)
+  discountType   ProductDiscountType @default(PERCENTAGE)
+  discountAmount Decimal? @db.Decimal(12, 2)
 
   currency       String   @default("NGN")
   weight         Float?
@@ -635,6 +642,7 @@ model OfferSetProduct {
   productId      String
   product        Product         @relation(fields: [productId], references: [id], onDelete: Restrict)
   discountPercent Decimal?       @db.Decimal(5, 2)
+  discountAmount Decimal?       @db.Decimal(12, 2)
   freeDelivery   Boolean         @default(false)
   giftDescription String?
   createdAt      DateTime        @default(now())
