@@ -54,13 +54,23 @@ export async function GET(req: NextRequest) {
 
     const verifyRes = await fetch(
       `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-      { headers: { Authorization: `Bearer ${secretKey}` } }
+      {
+        headers: { Authorization: `Bearer ${secretKey}` },
+        cache: "no-store",
+        signal: AbortSignal.timeout(8_000),
+      }
     );
     const verifyJson = (await verifyRes.json().catch(() => null)) as
-      | { status?: boolean; data?: { status?: string } }
+      | { status?: boolean; data?: { reference?: string; status?: string } }
       | null;
 
-    const paystackStatus = verifyJson?.data?.status;
+    // Never turn a provider error, malformed response, or mismatched
+    // reference into a customer-facing payment failure.
+    if (!verifyRes.ok || verifyJson?.status !== true || verifyJson.data?.reference !== reference) {
+      return withCors(ok({ status: "processing" as const }), origin);
+    }
+
+    const paystackStatus = verifyJson.data.status;
 
     if (paystackStatus === "success") {
       // Paystack confirms the charge, but our own Order row (created by
