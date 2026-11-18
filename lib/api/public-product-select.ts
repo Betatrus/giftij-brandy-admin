@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import { computeEffectivePrice } from "@/lib/pricing/effective-price";
+import { computePriceAfterDiscount } from "@/lib/pricing/effective-price";
 
 /**
  * These select clauses are the enforcement point for "financial fields are
@@ -15,6 +15,8 @@ export const PUBLIC_PRODUCT_SUMMARY_SELECT = {
   shortDesc: true,
   price: true,
   discount: true,
+  discountType: true,
+  discountAmount: true,
   currency: true,
   featuredFlags: true,
   categories: { select: { name: true, slug: true } },
@@ -96,6 +98,8 @@ interface ProductSummaryRowShape {
   shortDesc: string;
   price: unknown;
   discount: unknown;
+  discountType: string;
+  discountAmount: unknown;
   currency: string;
   featuredFlags: string[];
   categories: { name: string; slug: string }[];
@@ -174,15 +178,18 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
     categories: row.categories,
     price: toNumber(row.price),
     discount: row.discount ? toNumber(row.discount) : null,
+    discountType: row.discountType,
+    discountAmount: row.discountAmount == null ? null : toNumber(row.discountAmount),
     // Precomputed via the SAME helper the Paystack webhook uses to set
     // OrderItem.unitPrice (lib/pricing/effective-price.ts) — so what
     // the storefront displays as the selling price and what actually
     // gets charged can never drift apart. `price` above remains the
     // "crossed-out" listed price for the storefront to show alongside it.
-    discountedPrice: computeEffectivePrice(
-      toNumber(row.price),
-      row.discount ? toNumber(row.discount) : 0
-    ),
+    discountedPrice: computePriceAfterDiscount(toNumber(row.price), {
+      type: row.discountType as "PERCENTAGE" | "FIXED",
+      percent: row.discount ? toNumber(row.discount) : 0,
+      amount: row.discountAmount == null ? null : toNumber(row.discountAmount),
+    }),
     currency: row.currency,
     coverImage: cover?.url ?? null,
     images: row.images.map((i) => i.url),
