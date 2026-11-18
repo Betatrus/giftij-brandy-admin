@@ -104,7 +104,7 @@ export async function createOfferSet(formData: FormData) {
   const amountRaw = String(formData.get("discountAmount") ?? "").trim();
   const discountPercent = discountRaw ? Number(discountRaw) : null;
   const discountAmount = amountRaw ? Number(amountRaw) : null;
-  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)) throw new Error("Discount must be greater than 0 and no more than 100 percent.");
+  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent >= 100)) throw new Error("Discount must be greater than 0 and below 100 percent.");
   if (discountPercent !== null && discountAmount !== null) throw new Error("Choose either a percentage or fixed discount, not both.");
   if (discountAmount !== null && (!Number.isFinite(discountAmount) || discountAmount <= 0 || products.some((product) => discountAmount >= Number(product.price)))) {
     throw new Error("Fixed discount must be greater than zero and below the selling price of every selected product.");
@@ -191,7 +191,7 @@ export async function updateOfferSet(formData: FormData) {
   const amountRaw = String(formData.get("discountAmount") ?? "").trim();
   const discountPercent = discountRaw ? Number(discountRaw) : null;
   const discountAmount = amountRaw ? Number(amountRaw) : null;
-  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)) throw new Error("Discount must be greater than 0 and no more than 100 percent.");
+  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent >= 100)) throw new Error("Discount must be greater than 0 and below 100 percent.");
   if (discountPercent !== null && discountAmount !== null) throw new Error("Choose either a percentage or fixed discount, not both.");
   if (discountAmount !== null && (!Number.isFinite(discountAmount) || discountAmount <= 0 || products.some((product) => discountAmount >= Number(product.price)))) {
     throw new Error("Fixed discount must be greater than zero and below the selling price of every selected product.");
