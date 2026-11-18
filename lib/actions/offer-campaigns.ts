@@ -98,6 +98,11 @@ export async function createOfferSet(formData: FormData) {
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
   const campaign = await prisma.offerCampaign.findUnique({ where: { id: campaignId }, select: { id: true } });
   if (!campaign) throw new Error("Campaign not found.");
+  const limitRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
+  const maxQualifyingOrders = limitRaw ? Number(limitRaw) : null;
+  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
+    throw new Error("Offer Set order limit must be a positive whole number.");
+  }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
@@ -115,6 +120,7 @@ export async function createOfferSet(formData: FormData) {
   const maxSort = await prisma.offerSet.aggregate({ where: { campaignId }, _max: { sortOrder: true } });
   const offerSet = await prisma.offerSet.create({ data: {
     campaignId, title, description: String(formData.get("description") ?? "").trim() || null,
+    maxQualifyingOrders,
     sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
     products: { create: productIds.map((productId) => ({ productId, discountPercent, discountAmount, freeDelivery, giftDescription })) },
   }});
@@ -185,6 +191,11 @@ export async function updateOfferSet(formData: FormData) {
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
   const existing = await prisma.offerSet.findFirst({ where: { id, campaignId }, select: { id: true } });
   if (!existing) throw new Error("Offer Set not found for this campaign.");
+  const limitRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
+  const maxQualifyingOrders = limitRaw ? Number(limitRaw) : null;
+  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
+    throw new Error("Offer Set order limit must be a positive whole number.");
+  }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
@@ -200,7 +211,7 @@ export async function updateOfferSet(formData: FormData) {
   const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
   if (discountPercent === null && discountAmount === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit: percentage discount, fixed discount, free delivery, or gift.");
   await prisma.$transaction(async (tx) => {
-    await tx.offerSet.update({ where: { id }, data: { title, description: String(formData.get("description") ?? "").trim() || null } });
+    await tx.offerSet.update({ where: { id }, data: { title, description: String(formData.get("description") ?? "").trim() || null, maxQualifyingOrders } });
     await tx.offerSetProduct.deleteMany({ where: { offerSetId: id } });
     await tx.offerSetProduct.createMany({ data: productIds.map((productId) => ({ offerSetId: id, productId, discountPercent, discountAmount, freeDelivery, giftDescription })) });
   });
