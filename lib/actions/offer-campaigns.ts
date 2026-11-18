@@ -135,8 +135,15 @@ export async function activateOfferSet(formData: FormData) {
   const session = await requireMarketingAccess();
   const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
   const offerSetId = clean(formData.get("offerSetId"), "Offer Set", 80);
-  const offerSet = await prisma.offerSet.findFirst({ where: { id: offerSetId, campaignId, isEnabled: true }, select: { id: true } });
+  const offerSet = await prisma.offerSet.findFirst({
+    where: { id: offerSetId, campaignId, isEnabled: true },
+    select: { id: true, maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+  });
   if (!offerSet) throw new Error("That Offer Set is not enabled for this campaign.");
+  if (offerSet.maxQualifyingOrders !== null &&
+    offerSet.qualifyingOrdersCount + offerSet.reservedQualifyingOrders >= offerSet.maxQualifyingOrders) {
+    throw new Error("That Offer Set has reached its order limit. Enable or select another Offer Set.");
+  }
   await prisma.offerCampaign.update({ where: { id: campaignId }, data: { activeOfferSetId: offerSetId } });
   await logActivity({ userId: session.user.id, action: "OFFER_SET_ACTIVATED", resource: `OfferCampaign:${campaignId}`, metadata: { offerSetId } });
   revalidatePath("/admin/marketing");
