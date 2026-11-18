@@ -186,6 +186,7 @@ type CheckoutPriceSnapshot = {
   variantId: string | null;
   quantity: number;
   unitPrice: number;
+  offerSetId: string | null;
 };
 
 function getValidatedPriceSnapshots(
@@ -204,6 +205,7 @@ function getValidatedPriceSnapshots(
       !line || typeof line.productId !== "string" || !line.productId.trim() ||
       !(line.variantId === undefined || line.variantId === null || (typeof line.variantId === "string" && line.variantId.trim())) ||
       !Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
+      !(line.offerSetId === undefined || line.offerSetId === null || (typeof line.offerSetId === "string" && line.offerSetId.trim())) ||
       typeof line.unitPrice !== "number" || !Number.isFinite(line.unitPrice) || line.unitPrice < 0 ||
       !Number.isSafeInteger(Math.round(line.unitPrice * 100)) ||
       Math.abs(line.unitPrice * 100 - Math.round(line.unitPrice * 100)) > 1e-7
@@ -212,14 +214,15 @@ function getValidatedPriceSnapshots(
     }
 
     const variantId = line.variantId ?? null;
+    const offerSetId = line.offerSetId ?? null;
     const key = `${line.productId}:${variantId ?? ""}`;
     const existing = grouped.get(key);
 
     if (existing) {
       // Duplicate product/variant rows are safe to combine only when they
       // carry the same immutable unit-price snapshot.
-      if (existing.unitPrice !== line.unitPrice) {
-        throw new PaymentReviewRequiredError("Duplicate cart lines contain conflicting price snapshots.");
+      if (existing.unitPrice !== line.unitPrice || existing.offerSetId !== offerSetId) {
+        throw new PaymentReviewRequiredError("Duplicate cart lines contain conflicting price or Offer Set snapshots.");
       }
       const combinedQuantity = existing.quantity + line.quantity;
       if (!Number.isSafeInteger(combinedQuantity)) {
@@ -232,6 +235,7 @@ function getValidatedPriceSnapshots(
         variantId,
         quantity: line.quantity,
         unitPrice: line.unitPrice,
+        offerSetId,
       });
     }
   }
@@ -737,6 +741,10 @@ async function handleChargeSuccess(
           : normalizeCartForComparison(metadataCartLines);
 
         if (hasReservation) {
+          const metadataOfferSetIds = [...new Set(priceSnapshots.map((line) => line.offerSetId).filter((id): id is string => Boolean(id)))];
+          if (metadataOfferSetIds.length > 1 || (metadataOfferSetIds[0] ?? null) !== reservationResult.offerSetId) {
+            throw new PaymentReviewRequiredError("Payment Offer Set does not match the checkout reservation.");
+          }
           if (data.metadata?.reservationId !== reservationResult.reservationId) {
             throw new PaymentReviewRequiredError("Payment reservation ID does not match the attached checkout reservation.");
           }
