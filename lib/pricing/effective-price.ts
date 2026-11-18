@@ -17,3 +17,14 @@ export function computeEffectivePrice(price: number, discountPercent: number | n
 export function computeDiscountAmount(price: number, discountPercent: number | null | undefined): number {
   return Math.round((price - computeEffectivePrice(price, discountPercent)) * 100) / 100;
 }
+
+
+export function computePriceAfterDiscount(
+  price: number,
+  discount: { type: "PERCENTAGE" | "FIXED"; percent?: number | null; amount?: number | null },
+): number {
+  const effective = discount.type === "FIXED"
+    ? price - (discount.amount ?? 0)
+    : price * (1 - (discount.percent ?? 0) / 100);
+  return Math.round(Math.max(0, effective) * 100) / 100;
+}
