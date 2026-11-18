@@ -74,6 +74,8 @@ export const productSchema = z
     price: z.coerce.number().min(0, "Price must be 0 or more"),
     costPrice: z.coerce.number().min(0, "Cost price must be 0 or more"),
     discount: z.coerce.number().min(0).max(100).optional().nullable(),
+    discountType: z.enum(["PERCENTAGE", "FIXED"]).default("PERCENTAGE"),
+    discountAmount: z.coerce.number().min(0).optional().nullable(),
 
     currency: z.string().default("NGN"),
     weight: z.coerce.number().min(0).optional().nullable(),
@@ -124,6 +126,14 @@ export const productSchema = z
     {
       message: "Every Colour + Size variant needs both a color and a size.",
       path: ["variants"],
+    }
+  )
+  .refine(
+    (data) => data.discountType !== "FIXED" ||
+      (data.discountAmount != null && data.discountAmount > 0 && data.discountAmount < data.price),
+    {
+      message: "Fixed discount must be greater than zero and below the selling price.",
+      path: ["discountAmount"],
     }
   );
 
