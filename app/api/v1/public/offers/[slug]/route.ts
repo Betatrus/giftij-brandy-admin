@@ -61,6 +61,18 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       set.maxQualifyingOrders === null ||
       set.qualifyingOrdersCount + set.reservedQualifyingOrders < set.maxQualifyingOrders
     );
+    if (availableSets.length === 0) {
+      return withCors(ok({
+        expired: true,
+        campaign: {
+          title: campaign.title,
+          slug: campaign.slug,
+          description: campaign.description,
+          endsAt: campaign.endsAt,
+          maxQualifyingOrders: campaign.maxQualifyingOrders,
+        },
+      }), origin);
+    }
     const requestedSetId = req.nextUrl.searchParams.get("set");
     const selectedSetId = requestedSetId ??
       (availableSets.some((set) => set.id === campaign.activeOfferSetId)
