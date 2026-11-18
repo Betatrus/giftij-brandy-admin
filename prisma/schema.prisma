@@ -594,6 +594,7 @@ model OfferCampaign {
   description           String?             @db.Text
   announcementHtml      String?             @db.Text
   creativeImageUrl      String?
+  creativeImagePublicId String?
   ctaText               String              @default("Shop the offer")
   status                OfferCampaignStatus @default(DRAFT)
   startsAt              DateTime?
