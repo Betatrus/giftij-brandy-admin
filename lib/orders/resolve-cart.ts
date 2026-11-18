@@ -104,6 +104,16 @@ export async function resolveCartLines(
     }
     const unitPrice = computePriceAfterDiscount(Number(product.price), discount);
 
+    // A heavily discounted low-priced item can round to zero even when the
+    // percentage itself is below 100%. Paystack checkout requires a positive
+    // payable amount, so reject the invalid line before reserving stock.
+    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+      throw new ApiError(
+        "VALIDATION_ERROR",
+        `The discount for "${product.name}" leaves no payable balance. Please adjust the discount before checkout.`,
+      );
+    }
+
     if (line.sku) {
       const variant = product.variants.find((item) => item.sku === line.sku);
       if (!variant || variant.status === "ARCHIVED") {
