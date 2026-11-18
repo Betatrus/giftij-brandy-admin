@@ -698,10 +698,9 @@ async function handleChargeSuccess(
         const hasReservation = reservationResult.cart.length > 0;
         let offerSlotExpired = false;
         if (reservationResult.offerCampaignId && !reservationResult.consumed) {
-          // A payment can arrive after the ten-minute reservation expiry. Recount it
-          // only if the campaign still has a qualifying-order slot; otherwise flag it
-          // for admin review instead of silently exceeding the configured limit.
-          const lateSlotClaim = await tx.$executeRaw`
+          // Late success may claim a campaign slot only if the campaign still has
+          // capacity. The selected Offer Set has its own independent cap as well.
+          const lateCampaignSlotClaim = await tx.$executeRaw`
             UPDATE "OfferCampaign"
             SET "qualifyingOrdersCount" = "qualifyingOrdersCount" + 1,
                 "updatedAt" = NOW()
@@ -711,7 +710,27 @@ async function handleChargeSuccess(
                 OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
               )
           `;
-          offerSlotExpired = lateSlotClaim !== 1;
+          offerSlotExpired = lateCampaignSlotClaim !== 1;
+
+          if (!offerSlotExpired && reservationResult.offerSetId) {
+            const lateOfferSetSlotClaim = await tx.$executeRaw`
+              UPDATE "OfferSet"
+              SET "qualifyingOrdersCount" = "qualifyingOrdersCount" + 1,
+                  "updatedAt" = NOW()
+              WHERE "id" = ${reservationResult.offerSetId}
+                AND (
+                  "maxQualifyingOrders" IS NULL
+                  OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
+                )
+            `;
+            if (lateOfferSetSlotClaim !== 1) {
+              await tx.offerCampaign.updateMany({
+                where: { id: reservationResult.offerCampaignId, qualifyingOrdersCount: { gt: 0 } },
+                data: { qualifyingOrdersCount: { decrement: 1 } },
+              });
+              offerSlotExpired = true;
+            }
+          }
         }
         const cartLines = hasReservation
           ? normalizeCartForComparison(reservationResult.cart)
