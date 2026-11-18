@@ -16,24 +16,38 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     const now = new Date();
     const { prisma } = await import("@/lib/prisma");
     const campaign = await prisma.offerCampaign.findFirst({
-      where: {
-        slug,
-        status: "PUBLISHED",
-        AND: [
-          { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
-          { OR: [{ endsAt: null }, { endsAt: { gt: now } }] },
-        ],
-      },
+      where: { slug, status: "PUBLISHED" },
       select: {
         id: true, title: true, slug: true, description: true, announcementHtml: true, creativeImageUrl: true,
         ctaText: true, startsAt: true, endsAt: true, maxQualifyingOrders: true,
         qualifyingOrdersCount: true, reservedQualifyingOrders: true, activeOfferSetId: true,
       },
     });
-    if (!campaign || !campaign.activeOfferSetId || (
-      campaign.maxQualifyingOrders !== null &&
-      campaign.qualifyingOrdersCount + campaign.reservedQualifyingOrders >= campaign.maxQualifyingOrders
-    )) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+    if (!campaign) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+
+    // A published campaign that has ended or exhausted its order cap should
+    // render a real customer-facing expired page instead of a generic 404.
+    // Future campaigns remain unavailable until their scheduled start.
+    if (campaign.startsAt && campaign.startsAt > now) {
+      throw new ApiError("NOT_FOUND", "This offer has not started yet.");
+    }
+    const reachedOrderLimit = campaign.maxQualifyingOrders !== null &&
+      campaign.qualifyingOrdersCount + campaign.reservedQualifyingOrders >= campaign.maxQualifyingOrders;
+    if ((campaign.endsAt !== null && campaign.endsAt <= now) || reachedOrderLimit) {
+      return withCors(ok({
+        expired: true,
+        campaign: {
+          title: campaign.title,
+          slug: campaign.slug,
+          description: campaign.description,
+          endsAt: campaign.endsAt,
+          maxQualifyingOrders: campaign.maxQualifyingOrders,
+        },
+      }), origin);
+    }
+    if (!campaign.activeOfferSetId) {
+      throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+    }
 
     const availableSets = await prisma.offerSet.findMany({
       where: { campaignId: campaign.id, isEnabled: true },
