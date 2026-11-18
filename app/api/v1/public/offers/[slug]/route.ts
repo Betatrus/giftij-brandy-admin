@@ -16,7 +16,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     const now = new Date();
     const { prisma } = await import("@/lib/prisma");
     const campaign = await prisma.offerCampaign.findFirst({
-      where: { slug, status: "PUBLISHED" },
+      where: { slug, status: { in: ["PUBLISHED", "ENDED"] } },
       select: {
         id: true, title: true, slug: true, description: true, announcementHtml: true, creativeImageUrl: true,
         ctaText: true, startsAt: true, endsAt: true, maxQualifyingOrders: true,
@@ -33,7 +33,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     }
     const reachedOrderLimit = campaign.maxQualifyingOrders !== null &&
       campaign.qualifyingOrdersCount + campaign.reservedQualifyingOrders >= campaign.maxQualifyingOrders;
-    if ((campaign.endsAt !== null && campaign.endsAt <= now) || reachedOrderLimit) {
+    if (campaign.status === "ENDED" || (campaign.endsAt !== null && campaign.endsAt <= now) || reachedOrderLimit) {
       return withCors(ok({
         expired: true,
         campaign: {
