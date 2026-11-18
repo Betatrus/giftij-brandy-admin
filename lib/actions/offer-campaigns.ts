@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity-log";
 import { revalidatePath } from "next/cache";
+import { createSignedCampaignUpload, getImageResource, isCampaignMediaCloudinaryId } from "@/lib/cloudinary";
 
 async function requireMarketingAccess() {
   const session = await auth();
@@ -34,6 +35,30 @@ function optionalDate(value: FormDataEntryValue | null, label: string) {
   return date;
 }
 
+
+async function resolveCampaignCreative(formData: FormData) {
+  const cloudinaryId = String(formData.get("creativeImagePublicId") ?? "").trim();
+  if (cloudinaryId) {
+    if (!isCampaignMediaCloudinaryId(cloudinaryId)) throw new Error("Invalid campaign image asset.");
+    const asset = await getImageResource(cloudinaryId);
+    if (!isCampaignMediaCloudinaryId(asset.cloudinaryId) || !asset.url.startsWith("https://")) {
+      throw new Error("The uploaded campaign image could not be verified.");
+    }
+    return { url: asset.url, publicId: asset.cloudinaryId };
+  }
+  const url = String(formData.get("creativeImageUrl") ?? "").trim();
+  if (!url) return { url: null, publicId: null };
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error("Creative image URL must be a valid absolute URL."); }
+  if (parsed.protocol !== "https:") throw new Error("Creative image URL must use HTTPS.");
+  return { url, publicId: null };
+}
+
+export async function getCampaignCreativeUploadSignature() {
+  await requireMarketingAccess();
+  return createSignedCampaignUpload();
+}
+
 export async function createOfferCampaign(formData: FormData) {
   const session = await requireMarketingAccess();
   const title = clean(formData.get("title"), "Campaign title", 120);
@@ -51,11 +76,13 @@ export async function createOfferCampaign(formData: FormData) {
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
     throw new Error("Order limit must be a positive whole number.");
   }
+  const creative = await resolveCampaignCreative(formData);
   const campaign = await prisma.offerCampaign.create({ data: {
     title, slug,
     description: String(formData.get("description") ?? "").trim() || null,
     announcementHtml: announcementHtml || null,
-    creativeImageUrl: String(formData.get("creativeImageUrl") ?? "").trim() || null,
+    creativeImageUrl: creative.url,
+    creativeImagePublicId: creative.publicId,
     ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
     startsAt, endsAt, maxQualifyingOrders,
   }});
@@ -134,10 +161,12 @@ export async function updateOfferCampaign(formData: FormData) {
   const maxRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
   const maxQualifyingOrders = maxRaw ? Number(maxRaw) : null;
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
+  const creative = await resolveCampaignCreative(formData);
   await prisma.offerCampaign.update({ where: { id }, data: {
     title, slug, description: String(formData.get("description") ?? "").trim() || null,
     announcementHtml: announcementHtml || null,
-    creativeImageUrl: String(formData.get("creativeImageUrl") ?? "").trim() || null,
+    creativeImageUrl: creative.url,
+    creativeImagePublicId: creative.publicId,
     ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
     startsAt, endsAt, maxQualifyingOrders,
   }});
