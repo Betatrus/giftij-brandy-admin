@@ -93,11 +93,16 @@ export function CustomerReturnPanel() {
   }
 
   return (
-    <section className="mb-6 rounded-2xl border border-cream bg-white p-5 shadow-soft">
-      <div className="mb-4">
-        <h2 className="font-display text-lg text-ink">Customer Return / Refund</h2>
-        <p className="mt-1 font-body text-sm text-ink/50">Record a return after the customer has received and returned the item. Select the refund status based on the manual refund process; only resale-eligible units are added back to available stock.</p>
-      </div>
+    <details className="mb-6 rounded-2xl border border-cream bg-white shadow-soft group">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-5 [&::-webkit-details-marker]:hidden">
+        <span>
+          <span className="block font-display text-lg text-ink">Customer Return / Refund</span>
+          <span className="mt-1 block font-body text-sm text-ink/50">Record a customer return, reconcile refunds and restock only resale-eligible units.</span>
+        </span>
+        <span aria-hidden="true" className="shrink-0 rounded-full border border-cream px-3 py-1 text-xs text-ink/60 group-open:hidden">Open</span>
+        <span aria-hidden="true" className="hidden shrink-0 rounded-full border border-cream px-3 py-1 text-xs text-ink/60 group-open:inline">Close</span>
+      </summary>
+      <div className="border-t border-cream p-5">
       <div className="mb-5 rounded-xl border border-cream p-4">
         <h3 className="font-display text-base text-ink">Pending refunds</h3>
         <p className="mt-1 text-xs text-ink/50">After confirming the refund outside this system, mark it completed here. This updates revenue reconciliation and records the staff action.</p>
@@ -162,6 +167,7 @@ export function CustomerReturnPanel() {
       )}
       {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       {message && <p className="mt-3 text-sm text-green-700">{message}</p>}
-    </section>
+      </div>
+    </details>
   );
 }
