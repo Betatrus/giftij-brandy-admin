@@ -207,3 +207,94 @@ export async function updateOfferSet(formData: FormData) {
   await logActivity({ userId: session.user.id, action: "OFFER_SET_UPDATED", resource: `OfferSet:${id}`, metadata: { campaignId, title, productCount: productIds.length } });
   revalidatePath("/admin/marketing");
 }
+
+
+export async function toggleOfferSetEnabled(formData: FormData) {
+  const session = await requireMarketingAccess();
+  const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
+  const offerSetId = clean(formData.get("offerSetId"), "Offer Set", 80);
+  const enabled = String(formData.get("enabled") ?? "") === "true";
+
+  await prisma.$transaction(async (tx) => {
+    const campaign = await tx.offerCampaign.findUnique({
+      where: { id: campaignId },
+      select: { id: true, status: true, activeOfferSetId: true },
+    });
+    if (!campaign) throw new Error("Campaign not found.");
+    const offerSet = await tx.offerSet.findFirst({
+      where: { id: offerSetId, campaignId },
+      select: { id: true },
+    });
+    if (!offerSet) throw new Error("Offer Set not found for this campaign.");
+
+    await tx.offerSet.update({ where: { id: offerSetId }, data: { isEnabled: enabled } });
+    if (!enabled && campaign.activeOfferSetId === offerSetId) {
+      const replacement = await tx.offerSet.findFirst({
+        where: { campaignId, isEnabled: true, id: { not: offerSetId } },
+        orderBy: { sortOrder: "asc" },
+        select: { id: true },
+      });
+      await tx.offerCampaign.update({
+        where: { id: campaignId },
+        data: {
+          activeOfferSetId: replacement?.id ?? null,
+          ...(replacement ? {} : { status: campaign.status === "PUBLISHED" ? "PAUSED" : campaign.status }),
+        },
+      });
+    }
+  });
+
+  await logActivity({
+    userId: session.user.id,
+    action: enabled ? "OFFER_SET_ENABLED" : "OFFER_SET_DISABLED",
+    resource: `OfferSet:${offerSetId}`,
+    metadata: { campaignId, enabled },
+  });
+  revalidatePath("/admin/marketing");
+  revalidatePath("/offers");
+}
+
+export async function deleteOfferCampaign(formData: FormData) {
+  const session = await requireMarketingAccess();
+  const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
+
+  const campaign = await prisma.offerCampaign.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true,
+      title: true,
+      slug: true,
+      qualifyingOrdersCount: true,
+      reservedQualifyingOrders: true,
+      _count: { select: { checkoutReservations: true } },
+    },
+  });
+  if (!campaign) throw new Error("Campaign not found.");
+
+  const activeReservations = await prisma.checkoutReservation.count({
+    where: {
+      offerCampaignId: campaignId,
+      status: "ACTIVE",
+      expiresAt: { gt: new Date() },
+    },
+  });
+  if (
+    campaign.qualifyingOrdersCount > 0 ||
+    campaign.reservedQualifyingOrders > 0 ||
+    activeReservations > 0
+  ) {
+    throw new Error(
+      "This campaign has paid orders or active checkout reservations. End or pause it instead of deleting it so its order history and payment records remain protected.",
+    );
+  }
+
+  await prisma.offerCampaign.delete({ where: { id: campaignId } });
+  await logActivity({
+    userId: session.user.id,
+    action: "OFFER_CAMPAIGN_DELETED",
+    resource: `OfferCampaign:${campaignId}`,
+    metadata: { title: campaign.title, slug: campaign.slug },
+  });
+  revalidatePath("/admin/marketing");
+  revalidatePath(`/offers/${campaign.slug}`);
+}
