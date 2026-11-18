@@ -293,11 +293,14 @@ export async function deleteOfferCampaign(formData: FormData) {
       slug: true,
       qualifyingOrdersCount: true,
       reservedQualifyingOrders: true,
-      _count: { select: { checkoutReservations: true } },
+      offerSets: { select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true } },
     },
   });
   if (!campaign) throw new Error("Campaign not found.");
 
+  const hasOfferSetHistory = campaign.offerSets.some((set) =>
+    set.qualifyingOrdersCount > 0 || set.reservedQualifyingOrders > 0
+  );
   const activeReservations = await prisma.checkoutReservation.count({
     where: {
       offerCampaignId: campaignId,
@@ -307,6 +310,7 @@ export async function deleteOfferCampaign(formData: FormData) {
   if (
     campaign.qualifyingOrdersCount > 0 ||
     campaign.reservedQualifyingOrders > 0 ||
+    hasOfferSetHistory ||
     activeReservations > 0
   ) {
     throw new Error(
