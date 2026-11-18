@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { ApiError } from "@/lib/api/api-error";
-import { computeEffectivePrice } from "@/lib/pricing/effective-price";
+import { computePriceAfterDiscount } from "@/lib/pricing/effective-price";
 import type { CartLine } from "@/lib/orders/stock";
 
 export interface ResolvedCartLine extends CartLine {
@@ -30,7 +30,7 @@ export async function resolveCartLines(
   const products = await prisma.product.findMany({
     where: { slug: { in: slugs }, status: "ACTIVE" },
     select: {
-      id: true, slug: true, name: true, price: true, discount: true,
+      id: true, slug: true, name: true, price: true, discount: true, discountType: true, discountAmount: true,
       variants: { select: { id: true, sku: true, status: true } },
     },
   });
@@ -38,7 +38,7 @@ export async function resolveCartLines(
 
   let campaignId: string | null = null;
   let defaultOfferSetId: string | null = null;
-  let offerRuleBySetAndProduct = new Map<string, { discountPercent: number | null }>();
+  let offerRuleBySetAndProduct = new Map<string, { discountPercent: number | null; discountAmount: number | null }>();
   if (offerSlugs.length === 1) {
     const now = new Date();
     const campaign = await prisma.offerCampaign.findFirst({
@@ -77,10 +77,11 @@ export async function resolveCartLines(
         offerSetId: { in: selectedSetIds },
         productId: { in: products.map((product) => product.id) },
       },
-      select: { offerSetId: true, productId: true, discountPercent: true },
+      select: { offerSetId: true, productId: true, discountPercent: true, discountAmount: true },
     });
     offerRuleBySetAndProduct = new Map(rules.map((rule) => [`${rule.offerSetId}:${rule.productId}`, {
       discountPercent: rule.discountPercent === null ? null : Number(rule.discountPercent),
+      discountAmount: rule.discountAmount === null ? null : Number(rule.discountAmount),
     }]));
     campaignId = campaign.id;
   }
@@ -89,14 +90,19 @@ export async function resolveCartLines(
     const product = productBySlug.get(line.productSlug);
     if (!product) throw new ApiError("NOT_FOUND", `Product "${line.productSlug}" is no longer available.`);
 
-    let discountPercent = product.discount ? Number(product.discount) : 0;
+    let discount: { type: "PERCENTAGE" | "FIXED"; percent?: number | null; amount?: number | null } = {
+      type: product.discountType,
+      percent: product.discount ? Number(product.discount) : 0,
+      amount: product.discountAmount === null ? null : Number(product.discountAmount),
+    };
     if (line.offerCampaignSlug) {
       const lineOfferSetId = line.offerSetId ?? defaultOfferSetId;
       const rule = lineOfferSetId ? offerRuleBySetAndProduct.get(`${lineOfferSetId}:${product.id}`) : undefined;
       if (!rule) throw new ApiError("OFFER_UNAVAILABLE", `"${product.name}" is not included in the currently selected Offer Set.`);
-      if (rule.discountPercent !== null) discountPercent = rule.discountPercent;
+      if (rule.discountPercent !== null) discount = { type: "PERCENTAGE", percent: rule.discountPercent };
+      else if (rule.discountAmount !== null) discount = { type: "FIXED", amount: rule.discountAmount };
     }
-    const unitPrice = computeEffectivePrice(Number(product.price), discountPercent);
+    const unitPrice = computePriceAfterDiscount(Number(product.price), discount);
 
     if (line.sku) {
       const variant = product.variants.find((item) => item.sku === line.sku);
