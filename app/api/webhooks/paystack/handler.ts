@@ -60,6 +60,7 @@ type PaystackWebhookEvent = {
         variantId?: string;
         quantity: number;
         unitPrice?: number;
+        offerSetId?: string | null;
       }[];
 
       shippingAddress?: Record<
@@ -186,6 +187,7 @@ type CheckoutPriceSnapshot = {
   variantId: string | null;
   quantity: number;
   unitPrice: number;
+  offerSetId: string | null;
 };
 
 function getValidatedPriceSnapshots(
@@ -204,6 +206,7 @@ function getValidatedPriceSnapshots(
       !line || typeof line.productId !== "string" || !line.productId.trim() ||
       !(line.variantId === undefined || line.variantId === null || (typeof line.variantId === "string" && line.variantId.trim())) ||
       !Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
+      !(line.offerSetId === undefined || line.offerSetId === null || (typeof line.offerSetId === "string" && line.offerSetId.trim())) ||
       typeof line.unitPrice !== "number" || !Number.isFinite(line.unitPrice) || line.unitPrice < 0 ||
       !Number.isSafeInteger(Math.round(line.unitPrice * 100)) ||
       Math.abs(line.unitPrice * 100 - Math.round(line.unitPrice * 100)) > 1e-7
@@ -212,14 +215,15 @@ function getValidatedPriceSnapshots(
     }
 
     const variantId = line.variantId ?? null;
+    const offerSetId = line.offerSetId ?? null;
     const key = `${line.productId}:${variantId ?? ""}`;
     const existing = grouped.get(key);
 
     if (existing) {
       // Duplicate product/variant rows are safe to combine only when they
       // carry the same immutable unit-price snapshot.
-      if (existing.unitPrice !== line.unitPrice) {
-        throw new PaymentReviewRequiredError("Duplicate cart lines contain conflicting price snapshots.");
+      if (existing.unitPrice !== line.unitPrice || existing.offerSetId !== offerSetId) {
+        throw new PaymentReviewRequiredError("Duplicate cart lines contain conflicting price or Offer Set snapshots.");
       }
       const combinedQuantity = existing.quantity + line.quantity;
       if (!Number.isSafeInteger(combinedQuantity)) {
@@ -232,6 +236,7 @@ function getValidatedPriceSnapshots(
         variantId,
         quantity: line.quantity,
         unitPrice: line.unitPrice,
+        offerSetId,
       });
     }
   }
@@ -698,10 +703,9 @@ async function handleChargeSuccess(
         const hasReservation = reservationResult.cart.length > 0;
         let offerSlotExpired = false;
         if (reservationResult.offerCampaignId && !reservationResult.consumed) {
-          // A payment can arrive after the ten-minute reservation expiry. Recount it
-          // only if the campaign still has a qualifying-order slot; otherwise flag it
-          // for admin review instead of silently exceeding the configured limit.
-          const lateSlotClaim = await tx.$executeRaw`
+          // Late success may claim a campaign slot only if the campaign still has
+          // capacity. The selected Offer Set has its own independent cap as well.
+          const lateCampaignSlotClaim = await tx.$executeRaw`
             UPDATE "OfferCampaign"
             SET "qualifyingOrdersCount" = "qualifyingOrdersCount" + 1,
                 "updatedAt" = NOW()
@@ -711,13 +715,37 @@ async function handleChargeSuccess(
                 OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
               )
           `;
-          offerSlotExpired = lateSlotClaim !== 1;
+          offerSlotExpired = lateCampaignSlotClaim !== 1;
+
+          if (!offerSlotExpired && reservationResult.offerSetId) {
+            const lateOfferSetSlotClaim = await tx.$executeRaw`
+              UPDATE "OfferSet"
+              SET "qualifyingOrdersCount" = "qualifyingOrdersCount" + 1,
+                  "updatedAt" = NOW()
+              WHERE "id" = ${reservationResult.offerSetId}
+                AND (
+                  "maxQualifyingOrders" IS NULL
+                  OR "qualifyingOrdersCount" + "reservedQualifyingOrders" < "maxQualifyingOrders"
+                )
+            `;
+            if (lateOfferSetSlotClaim !== 1) {
+              await tx.offerCampaign.updateMany({
+                where: { id: reservationResult.offerCampaignId, qualifyingOrdersCount: { gt: 0 } },
+                data: { qualifyingOrdersCount: { decrement: 1 } },
+              });
+              offerSlotExpired = true;
+            }
+          }
         }
         const cartLines = hasReservation
           ? normalizeCartForComparison(reservationResult.cart)
           : normalizeCartForComparison(metadataCartLines);
 
         if (hasReservation) {
+          const metadataOfferSetIds = [...new Set(priceSnapshots.map((line) => line.offerSetId).filter((id): id is string => Boolean(id)))];
+          if (metadataOfferSetIds.length > 1 || (metadataOfferSetIds[0] ?? null) !== reservationResult.offerSetId) {
+            throw new PaymentReviewRequiredError("Payment Offer Set does not match the checkout reservation.");
+          }
           if (data.metadata?.reservationId !== reservationResult.reservationId) {
             throw new PaymentReviewRequiredError("Payment reservation ID does not match the attached checkout reservation.");
           }

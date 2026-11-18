@@ -111,11 +111,18 @@ export async function POST(
      */
     try {
       const campaignIds = [...new Set(resolved.map((line) => line.offerCampaignId).filter((id): id is string => Boolean(id)))];
-      if (campaignIds.length > 1) throw new ApiError("VALIDATION_ERROR", "A checkout can use only one Offer Campaign at a time.");
+      const offerSetIds = [...new Set(resolved.map((line) => line.offerSetId).filter((id): id is string => Boolean(id)))];
+      if (campaignIds.length > 1 || offerSetIds.length > 1) {
+        throw new ApiError("VALIDATION_ERROR", "A checkout can use only one Offer Campaign and one Offer Set at a time.");
+      }
+      if (campaignIds.length !== offerSetIds.length) {
+        throw new ApiError("VALIDATION_ERROR", "The selected offer is incomplete. Refresh the offer page and try again.");
+      }
       const reservation =
         await reservationService.reserveStockForCheckout(
           resolved,
           campaignIds[0] ?? null,
+          offerSetIds[0] ?? null,
         );
 
       reservationId =

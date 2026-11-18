@@ -98,6 +98,11 @@ export async function createOfferSet(formData: FormData) {
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
   const campaign = await prisma.offerCampaign.findUnique({ where: { id: campaignId }, select: { id: true } });
   if (!campaign) throw new Error("Campaign not found.");
+  const limitRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
+  const maxQualifyingOrders = limitRaw ? Number(limitRaw) : null;
+  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
+    throw new Error("Offer Set order limit must be a positive whole number.");
+  }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
@@ -115,6 +120,7 @@ export async function createOfferSet(formData: FormData) {
   const maxSort = await prisma.offerSet.aggregate({ where: { campaignId }, _max: { sortOrder: true } });
   const offerSet = await prisma.offerSet.create({ data: {
     campaignId, title, description: String(formData.get("description") ?? "").trim() || null,
+    maxQualifyingOrders,
     sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
     products: { create: productIds.map((productId) => ({ productId, discountPercent, discountAmount, freeDelivery, giftDescription })) },
   }});
@@ -126,8 +132,15 @@ export async function activateOfferSet(formData: FormData) {
   const session = await requireMarketingAccess();
   const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
   const offerSetId = clean(formData.get("offerSetId"), "Offer Set", 80);
-  const offerSet = await prisma.offerSet.findFirst({ where: { id: offerSetId, campaignId, isEnabled: true }, select: { id: true } });
+  const offerSet = await prisma.offerSet.findFirst({
+    where: { id: offerSetId, campaignId, isEnabled: true },
+    select: { id: true, maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+  });
   if (!offerSet) throw new Error("That Offer Set is not enabled for this campaign.");
+  if (offerSet.maxQualifyingOrders !== null &&
+    offerSet.qualifyingOrdersCount + offerSet.reservedQualifyingOrders >= offerSet.maxQualifyingOrders) {
+    throw new Error("That Offer Set has reached its order limit. Enable or select another Offer Set.");
+  }
   await prisma.offerCampaign.update({ where: { id: campaignId }, data: { activeOfferSetId: offerSetId } });
   await logActivity({ userId: session.user.id, action: "OFFER_SET_ACTIVATED", resource: `OfferCampaign:${campaignId}`, metadata: { offerSetId } });
   revalidatePath("/admin/marketing");
@@ -138,10 +151,17 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   const id = clean(formData.get("campaignId"), "Campaign", 80);
   const status = String(formData.get("status") ?? "");
   if (!["DRAFT", "PUBLISHED", "PAUSED", "ENDED"].includes(status)) throw new Error("Invalid campaign status.");
-  const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true } } } });
+  const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true, maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true } } } });
   if (!campaign) throw new Error("Campaign not found.");
   if (status === "PUBLISHED" && !campaign.offerSets.length) throw new Error("Add at least one enabled Offer Set before publishing.");
-  if (status === "PUBLISHED" && !campaign.activeOfferSetId) throw new Error("Choose the Offer Set customers should see before publishing.");
+  if (status === "PUBLISHED") {
+    const activeSet = campaign.offerSets.find((set) => set.id === campaign.activeOfferSetId);
+    if (!activeSet) throw new Error("Choose an enabled Offer Set customers should see before publishing.");
+    if (activeSet.maxQualifyingOrders !== null &&
+      activeSet.qualifyingOrdersCount + activeSet.reservedQualifyingOrders >= activeSet.maxQualifyingOrders) {
+      throw new Error("The selected Offer Set has reached its order limit. Choose another enabled set before publishing.");
+    }
+  }
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
   revalidatePath("/admin/marketing");
@@ -157,12 +177,20 @@ export async function updateOfferCampaign(formData: FormData) {
   if (!slug) throw new Error("A valid campaign URL slug is required.");
   const duplicate = await prisma.offerCampaign.findFirst({ where: { slug, id: { not: id } }, select: { id: true } });
   if (duplicate) throw new Error("That campaign URL is already in use.");
+  const existingCampaign = await prisma.offerCampaign.findUnique({
+    where: { id },
+    select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+  });
+  if (!existingCampaign) throw new Error("Campaign not found.");
   const startsAt = optionalDate(formData.get("startsAt"), "Start date");
   const endsAt = optionalDate(formData.get("endsAt"), "End date");
   if (startsAt && endsAt && endsAt <= startsAt) throw new Error("End date must be after the start date.");
   const maxRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
   const maxQualifyingOrders = maxRaw ? Number(maxRaw) : null;
   if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
+  if (maxQualifyingOrders !== null && maxQualifyingOrders < existingCampaign.qualifyingOrdersCount + existingCampaign.reservedQualifyingOrders) {
+    throw new Error("The campaign limit cannot be lower than paid orders plus active reserved slots.");
+  }
   const creative = await resolveCampaignCreative(formData);
   await prisma.offerCampaign.update({ where: { id }, data: {
     title, slug, description: String(formData.get("description") ?? "").trim() || null,
@@ -183,8 +211,19 @@ export async function updateOfferSet(formData: FormData) {
   const title = clean(formData.get("title"), "Offer Set title", 100);
   const productIds = Array.from(new Set(formData.getAll("productIds").map(String).filter(Boolean)));
   if (!productIds.length) throw new Error("Select at least one product for this Offer Set.");
-  const existing = await prisma.offerSet.findFirst({ where: { id, campaignId }, select: { id: true } });
+  const existing = await prisma.offerSet.findFirst({
+    where: { id, campaignId },
+    select: { id: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true },
+  });
   if (!existing) throw new Error("Offer Set not found for this campaign.");
+  const limitRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
+  const maxQualifyingOrders = limitRaw ? Number(limitRaw) : null;
+  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
+    throw new Error("Offer Set order limit must be a positive whole number.");
+  }
+  if (maxQualifyingOrders !== null && maxQualifyingOrders < existing.qualifyingOrdersCount + existing.reservedQualifyingOrders) {
+    throw new Error("The Offer Set limit cannot be lower than paid orders plus active reserved slots.");
+  }
   const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
   if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
   const discountRaw = String(formData.get("discountPercent") ?? "").trim();
@@ -200,10 +239,104 @@ export async function updateOfferSet(formData: FormData) {
   const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
   if (discountPercent === null && discountAmount === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit: percentage discount, fixed discount, free delivery, or gift.");
   await prisma.$transaction(async (tx) => {
-    await tx.offerSet.update({ where: { id }, data: { title, description: String(formData.get("description") ?? "").trim() || null } });
+    await tx.offerSet.update({ where: { id }, data: { title, description: String(formData.get("description") ?? "").trim() || null, maxQualifyingOrders } });
     await tx.offerSetProduct.deleteMany({ where: { offerSetId: id } });
     await tx.offerSetProduct.createMany({ data: productIds.map((productId) => ({ offerSetId: id, productId, discountPercent, discountAmount, freeDelivery, giftDescription })) });
   });
   await logActivity({ userId: session.user.id, action: "OFFER_SET_UPDATED", resource: `OfferSet:${id}`, metadata: { campaignId, title, productCount: productIds.length } });
   revalidatePath("/admin/marketing");
+}
+
+
+export async function toggleOfferSetEnabled(formData: FormData) {
+  const session = await requireMarketingAccess();
+  const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
+  const offerSetId = clean(formData.get("offerSetId"), "Offer Set", 80);
+  const enabled = String(formData.get("enabled") ?? "") === "true";
+
+  await prisma.$transaction(async (tx) => {
+    const campaign = await tx.offerCampaign.findUnique({
+      where: { id: campaignId },
+      select: { id: true, status: true, activeOfferSetId: true },
+    });
+    if (!campaign) throw new Error("Campaign not found.");
+    const offerSet = await tx.offerSet.findFirst({
+      where: { id: offerSetId, campaignId },
+      select: { id: true },
+    });
+    if (!offerSet) throw new Error("Offer Set not found for this campaign.");
+
+    await tx.offerSet.update({ where: { id: offerSetId }, data: { isEnabled: enabled } });
+    if (!enabled && campaign.activeOfferSetId === offerSetId) {
+      const replacement = await tx.offerSet.findFirst({
+        where: { campaignId, isEnabled: true, id: { not: offerSetId } },
+        orderBy: { sortOrder: "asc" },
+        select: { id: true },
+      });
+      await tx.offerCampaign.update({
+        where: { id: campaignId },
+        data: {
+          activeOfferSetId: replacement?.id ?? null,
+          ...(replacement ? {} : { status: campaign.status === "PUBLISHED" ? "PAUSED" : campaign.status }),
+        },
+      });
+    }
+  });
+
+  await logActivity({
+    userId: session.user.id,
+    action: enabled ? "OFFER_SET_ENABLED" : "OFFER_SET_DISABLED",
+    resource: `OfferSet:${offerSetId}`,
+    metadata: { campaignId, enabled },
+  });
+  revalidatePath("/admin/marketing");
+  revalidatePath("/offers");
+}
+
+export async function deleteOfferCampaign(formData: FormData) {
+  const session = await requireMarketingAccess();
+  const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
+
+  const campaign = await prisma.offerCampaign.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true,
+      title: true,
+      slug: true,
+      qualifyingOrdersCount: true,
+      reservedQualifyingOrders: true,
+      offerSets: { select: { qualifyingOrdersCount: true, reservedQualifyingOrders: true } },
+    },
+  });
+  if (!campaign) throw new Error("Campaign not found.");
+
+  const hasOfferSetHistory = campaign.offerSets.some((set) =>
+    set.qualifyingOrdersCount > 0 || set.reservedQualifyingOrders > 0
+  );
+  const activeReservations = await prisma.checkoutReservation.count({
+    where: {
+      offerCampaignId: campaignId,
+      status: "ACTIVE",
+    },
+  });
+  if (
+    campaign.qualifyingOrdersCount > 0 ||
+    campaign.reservedQualifyingOrders > 0 ||
+    hasOfferSetHistory ||
+    activeReservations > 0
+  ) {
+    throw new Error(
+      "This campaign has paid orders or active checkout reservations. End or pause it instead of deleting it so its order history and payment records remain protected.",
+    );
+  }
+
+  await prisma.offerCampaign.delete({ where: { id: campaignId } });
+  await logActivity({
+    userId: session.user.id,
+    action: "OFFER_CAMPAIGN_DELETED",
+    resource: `OfferCampaign:${campaignId}`,
+    metadata: { title: campaign.title, slug: campaign.slug },
+  });
+  revalidatePath("/admin/marketing");
+  revalidatePath(`/offers/${campaign.slug}`);
 }

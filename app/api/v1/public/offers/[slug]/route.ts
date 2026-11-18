@@ -49,13 +49,35 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       throw new ApiError("NOT_FOUND", "This offer is no longer available.");
     }
 
-    const availableSets = await prisma.offerSet.findMany({
+    const allEnabledSets = await prisma.offerSet.findMany({
       where: { campaignId: campaign.id, isEnabled: true },
       orderBy: { sortOrder: "asc" },
-      select: { id: true, title: true, description: true },
+      select: {
+        id: true, title: true, description: true,
+        maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true,
+      },
     });
+    const availableSets = allEnabledSets.filter((set) =>
+      set.maxQualifyingOrders === null ||
+      set.qualifyingOrdersCount + set.reservedQualifyingOrders < set.maxQualifyingOrders
+    );
+    if (availableSets.length === 0) {
+      return withCors(ok({
+        expired: true,
+        campaign: {
+          title: campaign.title,
+          slug: campaign.slug,
+          description: campaign.description,
+          endsAt: campaign.endsAt,
+          maxQualifyingOrders: campaign.maxQualifyingOrders,
+        },
+      }), origin);
+    }
     const requestedSetId = req.nextUrl.searchParams.get("set");
-    const selectedSetId = requestedSetId ?? campaign.activeOfferSetId;
+    const selectedSetId = requestedSetId ??
+      (availableSets.some((set) => set.id === campaign.activeOfferSetId)
+        ? campaign.activeOfferSetId
+        : availableSets[0]?.id ?? null);
     if (!availableSets.some((set) => set.id === selectedSetId)) {
       throw new ApiError("NOT_FOUND", "That Offer Set is not available in this campaign.");
     }
@@ -64,6 +86,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       where: { id: selectedSetId, campaignId: campaign.id, isEnabled: true },
       select: {
         id: true, title: true, description: true,
+        maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true,
         products: {
           orderBy: { createdAt: "asc" },
           select: {
@@ -112,8 +135,18 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         qualifyingOrdersCount: campaign.qualifyingOrdersCount,
         defaultOfferSetId: campaign.activeOfferSetId,
       },
-      offerSets: availableSets,
-      offerSet: { id: offerSet.id, title: offerSet.title, description: offerSet.description },
+      offerSets: availableSets.map((set) => ({
+        id: set.id, title: set.title, description: set.description,
+        maxQualifyingOrders: set.maxQualifyingOrders,
+        qualifyingOrdersCount: set.qualifyingOrdersCount,
+        reservedQualifyingOrders: set.reservedQualifyingOrders,
+      })),
+      offerSet: {
+        id: offerSet.id, title: offerSet.title, description: offerSet.description,
+        maxQualifyingOrders: offerSet.maxQualifyingOrders,
+        qualifyingOrdersCount: offerSet.qualifyingOrdersCount,
+        reservedQualifyingOrders: offerSet.reservedQualifyingOrders,
+      },
       products,
     }), origin);
   } catch (error) {
