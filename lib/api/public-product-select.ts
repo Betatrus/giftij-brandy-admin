@@ -184,8 +184,6 @@ export function toProductSummaryDTO(row: ProductSummaryRowShape) {
     discount: row.discount ? toNumber(row.discount) : null,
     discountType: row.discountType,
     discountAmount: row.discountAmount == null ? null : toNumber(row.discountAmount),
-    discountType: row.discountType,
-    discountAmount: row.discountAmount == null ? null : toNumber(row.discountAmount),
     // Precomputed via the SAME helper the Paystack webhook uses to set
     // OrderItem.unitPrice (lib/pricing/effective-price.ts) — so what
     // the storefront displays as the selling price and what actually
