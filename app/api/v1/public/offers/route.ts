@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { computePriceAfterDiscount } from "@/lib/pricing/effective-price";
 import { ok, fail } from "@/lib/api/respond";
 import { withCors, corsPreflight } from "@/lib/api/cors";
 import { hasValidStorefrontKey, storefrontUnauthorizedResponse } from "@/lib/api/storefront-auth";
@@ -46,6 +47,22 @@ export async function GET(req: NextRequest) {
             maxQualifyingOrders: true,
             qualifyingOrdersCount: true,
             reservedQualifyingOrders: true,
+            products: {
+              orderBy: { createdAt: "asc" },
+              select: {
+                discountPercent: true,
+                discountAmount: true,
+                freeDelivery: true,
+                giftDescription: true,
+                product: {
+                  select: {
+                    slug: true, name: true, price: true, discount: true,
+                    discountType: true, discountAmount: true, status: true,
+                    images: { orderBy: { sortOrder: "asc" }, take: 1, select: { url: true, altText: true } },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -62,17 +79,36 @@ export async function GET(req: NextRequest) {
         );
         return campaignHasCapacity && hasAvailableOfferSet;
       })
-      .map(({ id, title, slug, description, creativeImageUrl, ctaText, startsAt, endsAt }) => ({
-        id,
-        title,
-        slug,
-        description,
-        creativeImageUrl,
-        ctaText,
-        startsAt,
-        endsAt,
+      .map(({ id, title, slug, description, creativeImageUrl, ctaText, startsAt, endsAt, offerSets }) => ({
+        id, title, slug, description, creativeImageUrl, ctaText, startsAt, endsAt,
         url: `/offers/${slug}`,
-      }));
+        products: offerSets.flatMap((set) => set.products
+          .filter((item) => item.product && item.product.status === "ACTIVE")
+          .map((item) => {
+            const product = item.product;
+            const basePrice = Number(product.price);
+            const discountPercent = item.discountPercent === null ? null : Number(item.discountPercent);
+            const discountAmount = item.discountAmount === null ? null : Number(item.discountAmount);
+            const productDiscount = {
+              type: product.discountType as "PERCENTAGE" | "FIXED",
+              percent: Number(product.discount ?? 0),
+              amount: product.discountAmount === null ? null : Number(product.discountAmount),
+            };
+            const offerDiscount = discountPercent !== null
+              ? { type: "PERCENTAGE" as const, percent: discountPercent }
+              : discountAmount !== null
+                ? { type: "FIXED" as const, amount: discountAmount }
+                : productDiscount;
+            return {
+              slug: product.slug, name: product.name, basePrice,
+              offerPrice: computePriceAfterDiscount(basePrice, offerDiscount),
+              discountPercent, discountAmount, freeDelivery: item.freeDelivery,
+              giftDescription: item.giftDescription,
+              image: product.images[0]?.url ?? null,
+              imageAlt: product.images[0]?.altText ?? product.name,
+            };
+          })),
+      })).filter((campaign) => campaign.products.length > 0);
 
     return withCors(ok(activeCampaigns), origin);
   } catch (error) {
