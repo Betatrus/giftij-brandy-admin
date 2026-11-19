@@ -1,25 +1,10 @@
 import type { Metadata } from "next";
-import { Playfair_Display, Jost, Cormorant_Garamond } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const playfair = Playfair_Display({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  variable: "--font-display",
-});
-
-const jost = Jost({
-  subsets: ["latin"],
-  weight: ["400", "500"],
-  variable: "--font-body",
-});
-
-const cormorant = Cormorant_Garamond({
-  subsets: ["latin"],
-  weight: ["400"],
-  style: ["italic"],
-  variable: "--font-accent",
-});
+const playfair = localFont({ src: "./fonts/playfair-display-latin.woff2", weight: "400 900", variable: "--font-display", display: "swap" });
+const jost = localFont({ src: "./fonts/jost-latin.woff2", weight: "300 700", variable: "--font-body", display: "swap" });
+const cormorant = localFont({ src: "./fonts/cormorant-garamond-italic-latin.woff2", weight: "400", style: "italic", variable: "--font-accent", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Giftij Brandy — Admin Portal",
