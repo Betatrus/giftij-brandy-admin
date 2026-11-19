@@ -44,6 +44,7 @@ export async function GET(req: NextRequest) {
         offerSets: {
           where: { isEnabled: true },
           select: {
+            id: true,
             maxQualifyingOrders: true,
             qualifyingOrdersCount: true,
             reservedQualifyingOrders: true,
@@ -101,6 +102,7 @@ export async function GET(req: NextRequest) {
                 : productDiscount;
             return {
               slug: product.slug, name: product.name, basePrice,
+              offerSetId: set.id,
               offerPrice: computePriceAfterDiscount(basePrice, offerDiscount),
               discountPercent, discountAmount, freeDelivery: item.freeDelivery,
               giftDescription: item.giftDescription,
