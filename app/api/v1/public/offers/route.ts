@@ -83,7 +83,12 @@ export async function GET(req: NextRequest) {
       .map(({ id, title, slug, description, creativeImageUrl, ctaText, startsAt, endsAt, offerSets }) => ({
         id, title, slug, description, creativeImageUrl, ctaText, startsAt, endsAt,
         url: `/offers/${slug}`,
-        products: offerSets.flatMap((set) => set.products
+        products: offerSets
+          .filter((set) =>
+            set.maxQualifyingOrders === null ||
+            set.qualifyingOrdersCount + set.reservedQualifyingOrders < set.maxQualifyingOrders
+          )
+          .flatMap((set) => set.products
           .filter((item) => item.product && item.product.status === "ACTIVE")
           .map((item) => {
             const product = item.product;
@@ -100,11 +105,15 @@ export async function GET(req: NextRequest) {
               : discountAmount !== null
                 ? { type: "FIXED" as const, amount: discountAmount }
                 : productDiscount;
+            const offerPrice = computePriceAfterDiscount(basePrice, offerDiscount);
+            const savings = Math.max(0, basePrice - offerPrice);
             return {
               slug: product.slug, name: product.name, basePrice,
               offerSetId: set.id,
-              offerPrice: computePriceAfterDiscount(basePrice, offerDiscount),
-              discountPercent, discountAmount, freeDelivery: item.freeDelivery,
+              offerPrice,
+              discountPercent: offerDiscount.type === "PERCENTAGE" ? offerDiscount.percent : null,
+              discountAmount: offerDiscount.type === "FIXED" ? savings : null,
+              freeDelivery: item.freeDelivery,
               giftDescription: item.giftDescription,
               image: product.images[0]?.url ?? null,
               imageAlt: product.images[0]?.altText ?? product.name,
