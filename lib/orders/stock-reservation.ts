@@ -1177,6 +1177,30 @@ async function expireCheckoutReservation(
         "scheduled_expiry",
       );
 
+      if (reservation.customerEmail) {
+        const products = await tx.product.findMany({
+          where: { id: { in: [...new Set(lines.map((line) => line.productId))] } },
+          select: { id: true, name: true },
+        });
+        const productNames = new Map(products.map((product) => [product.id, product.name]));
+        await enqueueEmail(tx, {
+          eventKey: `checkout-expired:${reservation.id}`,
+          eventType: "CHECKOUT_EXPIRED",
+          recipientEmail: reservation.customerEmail,
+          recipientName: reservation.customerName,
+          payload: {
+            customerName: reservation.customerName || "there",
+            reference: reservation.paymentReference,
+            items: lines.map((line) => ({
+              name: productNames.get(line.productId) || "Giftij Brandy item",
+              variant: line.variantId,
+              quantity: line.quantity,
+            })),
+            expiredAt: now.toISOString(),
+          } as Prisma.InputJsonValue,
+        });
+      }
+
       return true;
     },
   );
