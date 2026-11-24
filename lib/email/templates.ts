@@ -31,7 +31,7 @@ const money = (value: unknown): string => {
 
 const dateLabel = (value: unknown): string => {
   if (typeof value !== "string" && !(value instanceof Date)) return "Not available";
-  const date = new Date(value);
+  const date = new Date(value instanceof Date ? value.toISOString() : value);
   if (Number.isNaN(date.getTime())) return "Not available";
   return new Intl.DateTimeFormat("en-NG", {
     day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit",
