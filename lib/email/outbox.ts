@@ -49,8 +49,12 @@ export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType:
 export async function enqueuePaymentFailedEmail(tx: Prisma.TransactionClient, input: { reference: string; email?: string; name?: string; amountKobo?: number; currency?: string }): Promise<void> {
   const reservation = await tx.checkoutReservation.findUnique({
     where: { paymentReference: input.reference },
-    select: { customerEmail: true, customerName: true, cart: true },
+    select: { status: true, customerEmail: true, customerName: true, cart: true },
   });
+  // The expiry notice already covers a late charge.failed webhook after the 10-minute release.
+  // A consumed reservation is also incompatible with a customer-facing failure notice.
+  if (reservation?.status === "EXPIRED" || reservation?.status === "CONSUMED") return;
+
   const recipientEmail = input.email?.trim().toLowerCase() || reservation?.customerEmail?.trim().toLowerCase() || "";
   if (!recipientEmail) return;
 
