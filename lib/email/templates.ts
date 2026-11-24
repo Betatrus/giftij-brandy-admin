@@ -1,6 +1,6 @@
 import type { EmailEventType } from "@prisma/client";
 
-type Item = { name?: string; variant?: string | null; quantity?: number; unitPrice?: number | string | null };
+type Item = { name?: string; slug?: string; variant?: string | null; quantity?: number; unitPrice?: number | string | null };
 type Payload = Record<string, unknown>;
 
 const SUPPORT_EMAIL = "jacobsgift3@gmail.com";
@@ -39,28 +39,39 @@ const dateLabel = (value: unknown): string => {
   }).format(date);
 };
 
-function orderItems(value: unknown): { html: string; plain: string } {
-  if (!Array.isArray(value)) return { html: "", plain: "" };
+function orderItems(value: unknown): { html: string; plain: string; subtotal: number; count: number } {
+  if (!Array.isArray(value)) return { html: "", plain: "", subtotal: 0, count: 0 };
   const items = value.filter((item): item is Item => Boolean(item && typeof item === "object" && !Array.isArray(item)));
-  if (!items.length) return { html: "", plain: "" };
+  if (!items.length) return { html: "", plain: "", subtotal: 0, count: 0 };
 
   const rows = items.map((item) => {
     const name = str(item.name, "Giftij Brandy item");
     const variant = str(item.variant);
     const quantity = Number.isInteger(item.quantity) && Number(item.quantity) > 0 ? Number(item.quantity) : 1;
     const unitPrice = item.unitPrice === null || item.unitPrice === undefined ? null : Number(item.unitPrice);
-    const lineTotal = unitPrice !== null && Number.isFinite(unitPrice) ? money(unitPrice * quantity) : "—";
+    const lineAmount = unitPrice !== null && Number.isFinite(unitPrice) ? unitPrice * quantity : null;
+    const lineTotal = lineAmount !== null ? money(lineAmount) : "—";
+    const productUrl = typeof item.slug === "string" && item.slug.trim()
+      ? `https://www.giftijbrandy.com/product/${encodeURIComponent(item.slug.trim())}`
+      : "";
+    const linkedName = productUrl
+      ? `<a href="${escapeHtml(productUrl)}" style="color:#6f5a35;text-decoration:underline">${escapeHtml(name)}</a>`
+      : escapeHtml(name);
     return {
+      amount: lineAmount,
+      quantity,
       html: `<tr>
         <td style="padding:13px 10px;border-bottom:1px solid #eeeae2;color:${INK};font-size:14px;line-height:1.45">
-          <strong style="font-weight:600">${escapeHtml(name)}</strong>${variant ? `<br><span style="font-size:12px;color:${MUTED}">${escapeHtml(variant)}</span>` : ""}
+          <strong style="font-weight:600">${linkedName}</strong>${variant ? `<br><span style="font-size:12px;color:${MUTED}">${escapeHtml(variant)}</span>` : ""}${productUrl ? `<br><a href="${escapeHtml(productUrl)}" style="font-size:12px;color:#6f5a35;text-decoration:underline">Shop here</a>` : ""}
         </td>
         <td align="center" style="padding:13px 8px;border-bottom:1px solid #eeeae2;color:#514d45;font-size:14px">${quantity}</td>
         <td align="right" style="padding:13px 10px;border-bottom:1px solid #eeeae2;color:${INK};font-size:14px;white-space:nowrap">${escapeHtml(lineTotal)}</td>
       </tr>`,
-      plain: `• ${name}${variant ? ` — ${variant}` : ""} | Qty: ${quantity} | ${lineTotal}`,
+      plain: `• ${name}${variant ? ` — ${variant}` : ""} | Qty: ${quantity} | ${lineTotal}${productUrl ? ` | Shop here: ${productUrl}` : ""}`,
     };
   });
+  const subtotal = rows.reduce((sum, row) => sum + (row.amount ?? 0), 0);
+  const count = rows.reduce((sum, row) => sum + row.quantity, 0);
 
   return {
     html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:14px 0 8px">
@@ -71,6 +82,8 @@ function orderItems(value: unknown): { html: string; plain: string } {
       </tr></thead><tbody>${rows.map((row) => row.html).join("")}</tbody>
     </table>`,
     plain: rows.map((row) => row.plain).join("\n"),
+    subtotal,
+    count,
   };
 }
 
@@ -125,8 +138,10 @@ export function renderTransactionalEmail(eventType: EmailEventType, value: unkno
       subject = "Your Giftij Brandy order has been cancelled";
       heading = "Your order has been cancelled";
       intro = `Your order has been cancelled because payment was not completed before ${deadline} WAT. The reserved items have now been released and are available for other customers. No order was created, and no payment was recorded as successful.`;
-      detailHtml = `${reference ? `<p style="margin:0 0 8px;color:${MUTED};font-size:13px">Payment reference: ${escapeHtml(reference)}</p>` : ""}`;
-      detailText = `${reference ? `Payment reference: ${reference}\n` : ""}`;
+      const deliveryLabel = payload.deliveryFee !== undefined && payload.deliveryFee !== null ? money(payload.deliveryFee) : "Not applicable — no order was created";
+      const cartRows = `<tr><td style="padding:7px 0;color:${MUTED};font-size:13px">Items</td><td align="right" style="padding:7px 0;color:${INK};font-size:13px">${itemSummary.count}</td></tr><tr><td style="padding:7px 0;color:${MUTED};font-size:13px">Subtotal</td><td align="right" style="padding:7px 0;color:${INK};font-size:13px">${escapeHtml(money(itemSummary.subtotal))}</td></tr><tr><td style="padding:7px 0;color:${MUTED};font-size:13px">Delivery fee</td><td align="right" style="padding:7px 0;color:${INK};font-size:13px">${escapeHtml(deliveryLabel)}</td></tr><tr><td style="padding:9px 0;color:${INK};font-size:14px;font-weight:700;border-top:1px solid ${BRAND_GOLD}">Cart total (items only)</td><td align="right" style="padding:9px 0;color:${INK};font-size:14px;font-weight:700;border-top:1px solid ${BRAND_GOLD}">${escapeHtml(money(itemSummary.subtotal))}</td></tr>`;
+      detailHtml = `<h2 style="margin:22px 0 8px;color:${INK};font-size:16px">Your cart details</h2>${itemSummary.html}<h2 style="margin:20px 0 8px;color:${INK};font-size:16px">Cart summary</h2>${summaryCard(cartRows)}<p style="margin:18px 0 8px;color:${INK};font-size:15px;font-weight:600">Would you still like to shop these products?</p><p style="margin:0;color:${MUTED};font-size:13px;line-height:1.7">Click the product link above to shop again. Alternatively, contact our admin team through WhatsApp or email. We’ll be happy to help.</p>${reference ? `<p style="margin:14px 0 0;color:${MUTED};font-size:12px">Payment reference: ${escapeHtml(reference)}</p>` : ""}`;
+      detailText = `Your cart details:\n${itemSummary.plain}\n\nCart summary:\nItems: ${itemSummary.count}\nSubtotal: ${money(itemSummary.subtotal)}\nDelivery fee: ${deliveryLabel}\nCart total (items only): ${money(itemSummary.subtotal)}\n\nWould you still like to shop these products? Use the Shop here links above, or contact our admin team through WhatsApp or email.\n${reference ? `Payment reference: ${reference}\n` : ""}`;
       break;
     }
     case "PAYMENT_FAILED":
@@ -157,9 +172,9 @@ export function renderTransactionalEmail(eventType: EmailEventType, value: unkno
     case "ORDER_COMPLETED":
       subject = orderNumber ? `Your Giftij Brandy order ${orderNumber} is complete` : "Your Giftij Brandy order is complete";
       heading = "Your order is complete";
-      intro = "Your order has been marked as completed by our team. Thank you for shopping with Giftij Brandy—we hope you enjoy your purchase.";
-      detailHtml = summaryCard(`${orderNumberRow}${payload.trackingNumber ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Tracking reference</td><td align="right" style="padding:8px 0;color:${INK};font-size:13px">${escapeHtml(str(payload.trackingNumber))}</td></tr>` : ""}`);
-      detailText = `Order number: ${orderNumber}\n${str(payload.trackingNumber) ? `Tracking reference: ${str(payload.trackingNumber)}\n` : ""}`;
+      intro = "Your order has been marked as completed by our team, and dispatch is on the way!! Thank you for shopping with Giftij Brandy—we hope you enjoy your purchase.";
+      detailHtml = `<h2 style="margin:22px 0 8px;color:${INK};font-size:16px">Your order details</h2>${summaryCard(`${orderNumberRow}${payload.orderDate ? dateRow : ""}${payload.trackingNumber ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Tracking reference</td><td align="right" style="padding:8px 0;color:${INK};font-size:13px">${escapeHtml(str(payload.trackingNumber))}</td></tr>` : ""}`)}${itemSummary.html}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td style="padding:13px 10px;color:${INK};font-size:14px;font-weight:700;border-top:1px solid ${BRAND_GOLD}">Order subtotal</td><td align="right" style="padding:13px 10px;color:${INK};font-size:15px;font-weight:700;border-top:1px solid ${BRAND_GOLD}">${escapeHtml(money(payload.subtotal))}</td></tr></table>`;
+      detailText = `Order number: ${orderNumber}\n${payload.orderDate ? `Date: ${orderDate}\n` : ""}${str(payload.trackingNumber) ? `Tracking reference: ${str(payload.trackingNumber)}\n` : ""}\nOrder details:\n${itemSummary.plain}\nOrder subtotal: ${money(payload.subtotal)}\n`;
       break;
     case "ORDER_CANCELLED":
       subject = orderNumber ? `An update about your Giftij Brandy order ${orderNumber}` : "An update about your Giftij Brandy order";
