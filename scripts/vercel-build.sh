@@ -15,4 +15,11 @@ if [ "${RUN_PREVIEW_MIGRATIONS:-}" = "1" ]; then
   npx tsx scripts/preview-integration-tests.ts
 fi
 
+# Apply additive Production schema migrations before compiling the matching app.
+# If a migration fails, stop the build and keep the previous deployment serving traffic.
+if [ "${VERCEL_ENV:-}" = "production" ]; then
+  echo "Applying Prisma migrations to the Production database."
+  npx prisma migrate deploy
+fi
+
 npm run build
