@@ -1184,9 +1184,14 @@ async function expireCheckoutReservation(
       if (reservation.customerEmail) {
         const products = await tx.product.findMany({
           where: { id: { in: [...new Set(lines.map((line) => line.productId))] } },
-          select: { id: true, name: true },
+          select: { id: true, name: true, slug: true, price: true },
         });
-        const productNames = new Map(products.map((product) => [product.id, product.name]));
+        const productById = new Map(products.map((product) => [product.id, product]));
+        const variants = await tx.productVariant.findMany({
+          where: { id: { in: lines.flatMap((line) => line.variantId ? [line.variantId] : []) } },
+          select: { id: true, value: true },
+        });
+        const variantById = new Map(variants.map((variant) => [variant.id, variant.value]));
         await enqueueEmail(tx, {
           eventKey: `checkout-expired:${reservation.id}`,
           eventType: "CHECKOUT_EXPIRED",
@@ -1195,11 +1200,16 @@ async function expireCheckoutReservation(
           payload: {
             customerName: reservation.customerName || "there",
             reference: reservation.paymentReference,
-            items: lines.map((line) => ({
-              name: productNames.get(line.productId) || "Giftij Brandy item",
-              variant: line.variantId,
-              quantity: line.quantity,
-            })),
+            items: lines.map((line) => {
+              const product = productById.get(line.productId);
+              return {
+                name: product?.name || "Giftij Brandy item",
+                slug: product?.slug || "",
+                variant: line.variantId ? variantById.get(line.variantId) || null : null,
+                quantity: line.quantity,
+                unitPrice: product ? Number(product.price) : null,
+              };
+            }),
             expiredAt: reservation.expiresAt.toISOString(),
           } as Prisma.InputJsonValue,
         });
