@@ -1,4 +1,4 @@
-type SendEmailInput = { to: string; subject: string; html: string; toName?: string; idempotencyKey?: string; tags?: string[] };
+type SendEmailInput = { to: string; subject: string; html: string; text?: string; toName?: string; idempotencyKey?: string; tags?: string[] };
 
 /** Sends transactional email through Brevo's v3 SMTP API. */
 export async function sendEmail(params: SendEmailInput): Promise<{ messageId: string | null }> {
@@ -16,6 +16,7 @@ export async function sendEmail(params: SendEmailInput): Promise<{ messageId: st
       sender: { name: senderName, email: senderEmail },
       to: [{ email: params.to, ...(params.toName ? { name: params.toName } : {}) }],
       subject: params.subject, htmlContent: params.html,
+      ...(params.text ? { textContent: params.text } : {}),
       ...(params.tags?.length ? { tags: params.tags } : {}),
       ...(params.idempotencyKey ? { headers: { IdempotencyKey: params.idempotencyKey } } : {}),
     }),
