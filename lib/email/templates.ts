@@ -1,70 +1,210 @@
 import type { EmailEventType } from "@prisma/client";
-type Item = { name?: string; variant?: string | null; quantity?: number };
+
+type Item = { name?: string; variant?: string | null; quantity?: number; unitPrice?: number | string | null };
 type Payload = Record<string, unknown>;
-const asPayload = (v: unknown): Payload => v && typeof v === "object" && !Array.isArray(v) ? v as Payload : {};
-const str = (v: unknown, fallback = ""): string => typeof v === "string" && v.trim() ? v.trim() : fallback;
-const escapeHtml = (v: string): string => {
-  const replacements: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-  return v.replace(/[&<>"']/g, (character) => replacements[character] ?? character);
+
+const SUPPORT_EMAIL = "jacobsgift3@gmail.com";
+const SUPPORT_WHATSAPP = "https://wa.me/2349023021320";
+const BRAND_GOLD = "#D8BD83";
+const INK = "#292722";
+const MUTED = "#77736B";
+
+const asPayload = (value: unknown): Payload =>
+  value && typeof value === "object" && !Array.isArray(value) ? value as Payload : {};
+
+const str = (value: unknown, fallback = ""): string =>
+  typeof value === "string" && value.trim() ? value.trim() : fallback;
+
+const escapeHtml = (value: string): string => {
+  const replacements: Record<string, string> = {
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  };
+  return value.replace(/[&<>"']/g, (character) => replacements[character] ?? character);
 };
-const money = (v: unknown): string => {
-  const amount = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(amount) ? new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 2 }).format(amount) : "Not available";
+
+const money = (value: unknown): string => {
+  const amount = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(amount)
+    ? new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 2 }).format(amount)
+    : "Not available";
 };
-function itemMarkup(value: unknown): { html: string; plain: string } {
+
+const dateLabel = (value: unknown): string => {
+  if (typeof value !== "string" && !(value instanceof Date)) return "Not available";
+  const date = new Date(value instanceof Date ? value.toISOString() : value);
+  if (Number.isNaN(date.getTime())) return "Not available";
+  return new Intl.DateTimeFormat("en-NG", {
+    day: "numeric", month: "long", year: "numeric", hour: "numeric", minute: "2-digit",
+    timeZone: "Africa/Lagos",
+  }).format(date);
+};
+
+function orderItems(value: unknown): { html: string; plain: string } {
   if (!Array.isArray(value)) return { html: "", plain: "" };
   const items = value.filter((item): item is Item => Boolean(item && typeof item === "object" && !Array.isArray(item)));
-  const html = items.length ? `<h3>Items</h3><ul>${items.map((item) => `<li>${escapeHtml(str(item.name, "Giftij Brandy item"))}${str(item.variant) ? ` — ${escapeHtml(str(item.variant))}` : ""} × ${Number.isInteger(item.quantity) ? item.quantity : 1}</li>`).join("")}</ul>` : "";
-  const plain = items.map((item) => `• ${str(item.name, "Giftij Brandy item")}${str(item.variant) ? ` — ${str(item.variant)}` : ""} × ${Number.isInteger(item.quantity) ? item.quantity : 1}`).join("\n");
-  return { html, plain };
+  if (!items.length) return { html: "", plain: "" };
+
+  const rows = items.map((item) => {
+    const name = str(item.name, "Giftij Brandy item");
+    const variant = str(item.variant);
+    const quantity = Number.isInteger(item.quantity) && Number(item.quantity) > 0 ? Number(item.quantity) : 1;
+    const unitPrice = item.unitPrice === null || item.unitPrice === undefined ? null : Number(item.unitPrice);
+    const lineTotal = unitPrice !== null && Number.isFinite(unitPrice) ? money(unitPrice * quantity) : "—";
+    return {
+      html: `<tr>
+        <td style="padding:13px 10px;border-bottom:1px solid #eeeae2;color:${INK};font-size:14px;line-height:1.45">
+          <strong style="font-weight:600">${escapeHtml(name)}</strong>${variant ? `<br><span style="font-size:12px;color:${MUTED}">${escapeHtml(variant)}</span>` : ""}
+        </td>
+        <td align="center" style="padding:13px 8px;border-bottom:1px solid #eeeae2;color:#514d45;font-size:14px">${quantity}</td>
+        <td align="right" style="padding:13px 10px;border-bottom:1px solid #eeeae2;color:${INK};font-size:14px;white-space:nowrap">${escapeHtml(lineTotal)}</td>
+      </tr>`,
+      plain: `• ${name}${variant ? ` — ${variant}` : ""} | Qty: ${quantity} | ${lineTotal}`,
+    };
+  });
+
+  return {
+    html: `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin:14px 0 8px">
+      <thead><tr>
+        <th align="left" style="padding:10px;color:#77736B;font-size:11px;letter-spacing:.7px;text-transform:uppercase;border-bottom:1px solid ${BRAND_GOLD}">Item</th>
+        <th align="center" style="padding:10px;color:#77736B;font-size:11px;letter-spacing:.7px;text-transform:uppercase;border-bottom:1px solid ${BRAND_GOLD}">Qty</th>
+        <th align="right" style="padding:10px;color:#77736B;font-size:11px;letter-spacing:.7px;text-transform:uppercase;border-bottom:1px solid ${BRAND_GOLD}">Amount</th>
+      </tr></thead><tbody>${rows.map((row) => row.html).join("")}</tbody>
+    </table>`,
+    plain: rows.map((row) => row.plain).join("\n"),
+  };
 }
+
+function footerHtml(year: number): string {
+  return `<tr><td style="padding:24px 28px 28px;background:#faf9f6;border-top:1px solid #eeeae2">
+    <p style="margin:0 0 10px;color:#77736B;font-size:11px;line-height:1.6">
+      This is an automated email address and is not monitored. Please do not reply to this email.
+    </p>
+    <p style="margin:0 0 10px;color:#77736B;font-size:11px;line-height:1.7">
+      For enquiries or assistance, kindly contact us through:<br>
+      Email: <a href="mailto:${SUPPORT_EMAIL}" style="color:#6f5a35;text-decoration:underline">${SUPPORT_EMAIL}</a><br>
+      WhatsApp: <a href="${SUPPORT_WHATSAPP}" style="color:#6f5a35;text-decoration:underline">Chat with our support team</a>
+    </p>
+    <p style="margin:14px 0 0;color:#99948a;font-size:10px;line-height:1.5">© ${year} Giftij Brandy. All rights reserved.</p>
+  </td></tr>`;
+}
+
 export function renderTransactionalEmail(eventType: EmailEventType, value: unknown): { subject: string; html: string; text: string } {
-  const p = asPayload(value);
-  const customer = str(p.customerName, "there");
-  const order = str(p.orderNumber);
-  const reference = str(p.reference);
-  const reason = str(p.reason);
-  const items = itemMarkup(p.items);
-  const orderLine = order ? `<p><strong>Order number:</strong> ${escapeHtml(order)}</p>` : "";
-  const refLine = reference ? `<p><strong>Payment reference:</strong> ${escapeHtml(reference)}</p>` : "";
-  const subtotal = p.subtotal !== undefined ? `<p><strong>Order subtotal:</strong> ${escapeHtml(money(p.subtotal))}</p>` : "";
-  let subject = "An update from Giftij Brandy", heading = "An update on your order", intro = "We have an update about your Giftij Brandy purchase.", extraHtml = "", extraText = "";
+  const payload = asPayload(value);
+  const customer = str(payload.customerName, "there");
+  const orderNumber = str(payload.orderNumber);
+  const reference = str(payload.reference);
+  const reason = str(payload.reason);
+  const itemSummary = orderItems(payload.items);
+  const orderDate = dateLabel(payload.orderDate);
+  const orderStatus = str(payload.orderStatus, "Confirmed — awaiting processing");
+  const totalPaid = payload.totalPaid ?? payload.subtotal;
+  const logoUrl = process.env.BREVO_LOGO_URL?.trim();
+  const safeLogoUrl = logoUrl && /^https:\/\//i.test(logoUrl) ? logoUrl : "";
+  const year = new Date().getFullYear();
+
+  let subject = "An update from Giftij Brandy";
+  let heading = "A little update from us";
+  let intro = "There is an update about your Giftij Brandy purchase.";
+  let detailHtml = "";
+  let detailText = "";
+
+  const orderNumberRow = orderNumber
+    ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Order number</td><td align="right" style="padding:8px 0;color:${INK};font-size:13px;font-weight:600">${escapeHtml(orderNumber)}</td></tr>`
+    : "";
+  const dateRow = payload.orderDate
+    ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Date</td><td align="right" style="padding:8px 0;color:${INK};font-size:13px">${escapeHtml(orderDate)}</td></tr>`
+    : "";
+  const statusRow = orderNumber
+    ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Order status</td><td align="right" style="padding:8px 0;color:${INK};font-size:13px">${escapeHtml(orderStatus)}</td></tr>`
+    : "";
+  const summaryCard = (rows: string) => `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background:#fbfaf7;border:1px solid #eeeae2;border-radius:8px;margin:18px 0 22px"><tr><td style="padding:14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table></td></tr></table>`;
+
   switch (eventType) {
     case "CHECKOUT_EXPIRED":
-      subject = "Your Giftij Brandy checkout has expired"; heading = "Your checkout session expired";
-      intro = "Your 10-minute checkout reservation expired before Paystack confirmed a successful payment. The reserved stock has been released and no order was created.";
-      extraHtml = refLine; extraText = reference ? `Payment reference: ${reference}\n` : ""; break;
+      subject = "Your Giftij Brandy checkout has expired";
+      heading = "Your checkout session has expired";
+      intro = "It looks like your checkout was not completed within the 10-minute reservation window. The reserved stock has now been released, and no order was created.";
+      detailHtml = reference ? `<p style="margin:0;color:${MUTED};font-size:13px">Payment reference: ${escapeHtml(reference)}</p>` : "";
+      detailText = reference ? `Payment reference: ${reference}\n` : "";
+      break;
     case "PAYMENT_FAILED":
-      subject = "Your Giftij Brandy payment was not completed"; heading = "Payment was not completed";
-      intro = "Paystack did not confirm a successful payment for this attempt. The checkout reservation has been released. If your bank shows a debit, please contact Customer Care before trying again.";
-      extraHtml = refLine + (p.amountNaira !== undefined && p.amountNaira !== null ? `<p><strong>Attempted amount:</strong> ${escapeHtml(money(p.amountNaira))}</p>` : "");
-      extraText = (reference ? `Payment reference: ${reference}\n` : "") + (p.amountNaira !== undefined && p.amountNaira !== null ? `Attempted amount: ${money(p.amountNaira)}\n` : ""); break;
+      subject = "Your Giftij Brandy payment was not completed";
+      heading = "Your payment was not completed";
+      intro = "Paystack did not confirm a successful payment for this attempt, so your order has not been confirmed and the checkout reservation has been released. If your bank account was debited, please contact our support team before trying again.";
+      detailHtml = `${reference ? `<p style="margin:0 0 8px;color:${MUTED};font-size:13px">Payment reference: ${escapeHtml(reference)}</p>` : ""}${payload.amountNaira !== undefined && payload.amountNaira !== null ? `<p style="margin:0;color:${MUTED};font-size:13px">Attempted amount: ${escapeHtml(money(payload.amountNaira))}</p>` : ""}`;
+      detailText = `${reference ? `Payment reference: ${reference}\n` : ""}${payload.amountNaira !== undefined && payload.amountNaira !== null ? `Attempted amount: ${money(payload.amountNaira)}\n` : ""}`;
+      break;
     case "ORDER_CONFIRMED":
-      subject = `Payment received — order ${order} confirmed`; heading = "Your order is confirmed";
-      intro = "Your payment has been verified successfully and your Giftij Brandy order has been created.";
-      extraHtml = orderLine + subtotal; extraText = `Order number: ${order}\nOrder subtotal: ${money(p.subtotal)}\n`;
-      if (p.stockUnavailable === true) { extraHtml += "<p>Our team will contact you to resolve a stock availability issue. Your payment is recorded; no unavailable stock was deducted.</p>"; extraText += "Our team will contact you to resolve a stock availability issue.\n"; } break;
+      subject = orderNumber ? `Payment received — order ${orderNumber} confirmed` : "Your Giftij Brandy order is confirmed";
+      heading = "Thank you. Your order is confirmed.";
+      intro = "Your payment has been successfully verified, and your order is now safely with our team. We’re delighted you chose Giftij Brandy.";
+      detailHtml = `${summaryCard(`${orderNumberRow}${statusRow}${dateRow}<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Payment</td><td align="right" style="padding:8px 0;color:#526746;font-size:13px;font-weight:600">Successful</td></tr>`)}
+        <h2 style="margin:22px 0 8px;color:${INK};font-size:16px">Your order</h2>
+        ${itemSummary.html}
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;margin-top:8px"><tr><td style="padding:13px 10px;color:${INK};font-size:14px;font-weight:700;border-top:1px solid ${BRAND_GOLD}">Total paid</td><td align="right" style="padding:13px 10px;color:${INK};font-size:16px;font-weight:700;border-top:1px solid ${BRAND_GOLD}">${escapeHtml(money(totalPaid))}</td></tr></table>
+        ${payload.stockUnavailable === true ? `<p style="margin:18px 0;padding:13px 15px;background:#fbf7ed;border-left:3px solid ${BRAND_GOLD};color:#5d5038;font-size:13px;line-height:1.6">Our team will contact you to resolve a stock availability issue. Your payment is recorded, and we will not allocate unavailable stock.</p>` : ""}`;
+      detailText = `Order number: ${orderNumber}\nOrder status: ${orderStatus}\nPayment: Successful\nDate: ${orderDate}\n\nYour order:\n${itemSummary.plain}\n\nTotal paid: ${money(totalPaid)}\n${payload.stockUnavailable === true ? "\nOur team will contact you to resolve a stock availability issue.\n" : ""}`;
+      break;
     case "ORDER_PROCESSING":
-      subject = `Your Giftij Brandy order ${order} is being processed`; heading = "Your order is being processed";
-      intro = "Our team has started working on your order. We will send another update when it is completed.";
-      extraHtml = orderLine + subtotal; extraText = `Order number: ${order}\n`; break;
+      subject = orderNumber ? `Your Giftij Brandy order ${orderNumber} is being prepared` : "Your Giftij Brandy order is being prepared";
+      heading = "We’re getting your order ready";
+      intro = "Our team has started processing your order. We’ll keep you informed as it moves through the next stage.";
+      detailHtml = summaryCard(orderNumberRow);
+      detailText = orderNumber ? `Order number: ${orderNumber}\n` : "";
+      break;
     case "ORDER_COMPLETED":
-      subject = `Your Giftij Brandy order ${order} has been completed`; heading = "Your order has been completed";
-      intro = "Your order has been marked as completed by our team.";
-      extraHtml = orderLine + (str(p.trackingNumber) ? `<p><strong>Tracking reference:</strong> ${escapeHtml(str(p.trackingNumber))}</p>` : "");
-      extraText = `Order number: ${order}\n` + (str(p.trackingNumber) ? `Tracking reference: ${str(p.trackingNumber)}\n` : ""); break;
+      subject = orderNumber ? `Your Giftij Brandy order ${orderNumber} is complete` : "Your Giftij Brandy order is complete";
+      heading = "Your order is complete";
+      intro = "Your order has been marked as completed by our team. Thank you for shopping with Giftij Brandy—we hope you enjoy your purchase.";
+      detailHtml = summaryCard(`${orderNumberRow}${payload.trackingNumber ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Tracking reference</td><td align="right" style="padding:8px 0;color:${INK};font-size:13px">${escapeHtml(str(payload.trackingNumber))}</td></tr>` : ""}`);
+      detailText = `Order number: ${orderNumber}\n${str(payload.trackingNumber) ? `Tracking reference: ${str(payload.trackingNumber)}\n` : ""}`;
+      break;
     case "ORDER_CANCELLED":
-      subject = `An update about Giftij Brandy order ${order}`; heading = "Your cancellation was approved";
-      intro = "Your cancellation review has been approved and the order has been cancelled.";
-      extraHtml = orderLine + (reason ? `<p><strong>Update:</strong> ${escapeHtml(reason)}</p>` : "") + "<p>If a refund is due, we will send a separate confirmation once it has been completed. This cancellation notice does not mean a refund has already been issued.</p>";
-      extraText = `Order number: ${order}\n${reason ? `Update: ${reason}\n` : ""}A separate confirmation will be sent if a refund is completed.\n`; break;
+      subject = orderNumber ? `An update about your Giftij Brandy order ${orderNumber}` : "An update about your Giftij Brandy order";
+      heading = "Your order has been cancelled";
+      intro = "Your cancellation request has been reviewed and approved by our team.";
+      detailHtml = `${summaryCard(orderNumberRow)}${reason ? `<p style="color:${MUTED};font-size:13px;line-height:1.6"><strong>Update:</strong> ${escapeHtml(reason)}</p>` : ""}<p style="color:${MUTED};font-size:13px;line-height:1.6">If a refund is due, we’ll send a separate confirmation once it has been completed. This notice does not mean a refund has already been issued.</p>`;
+      detailText = `Order number: ${orderNumber}\n${reason ? `Update: ${reason}\n` : ""}If a refund is due, a separate confirmation will be sent once it is complete.\n`;
+      break;
     case "ORDER_REFUNDED":
-      subject = `Your Giftij Brandy refund for order ${order} is complete`; heading = "Your refund is complete";
-      intro = "The refund for the returned item below has been marked as completed by our team.";
-      extraHtml = orderLine + (p.refundAmount !== null && p.refundAmount !== undefined ? `<p><strong>Refund amount:</strong> ${escapeHtml(money(p.refundAmount))}</p>` : "") + (p.productName ? `<p><strong>Item:</strong> ${escapeHtml(str(p.productName))} × ${Number(p.quantityReturned) || 1}</p>` : "");
-      extraText = `Order number: ${order}\n` + (p.refundAmount !== null && p.refundAmount !== undefined ? `Refund amount: ${money(p.refundAmount)}\n` : "") + (p.productName ? `Item: ${str(p.productName)} × ${Number(p.quantityReturned) || 1}\n` : ""); break;
+      subject = orderNumber ? `Your Giftij Brandy refund for order ${orderNumber} is complete` : "Your Giftij Brandy refund is complete";
+      heading = "Your refund is complete";
+      intro = "Our team has confirmed that the refund below has been completed.";
+      detailHtml = `${summaryCard(`${orderNumberRow}${payload.refundAmount !== null && payload.refundAmount !== undefined ? `<tr><td style="padding:8px 0;color:${MUTED};font-size:13px">Refund amount</td><td align="right" style="padding:8px 0;color:${INK};font-size:14px;font-weight:600">${escapeHtml(money(payload.refundAmount))}</td></tr>` : ""}`)}${payload.productName ? `<p style="color:${MUTED};font-size:13px">Item: ${escapeHtml(str(payload.productName))} × ${Number(payload.quantityReturned) || 1}</p>` : ""}`;
+      detailText = `Order number: ${orderNumber}\n${payload.refundAmount !== null && payload.refundAmount !== undefined ? `Refund amount: ${money(payload.refundAmount)}\n` : ""}${payload.productName ? `Item: ${str(payload.productName)} × ${Number(payload.quantityReturned) || 1}\n` : ""}`;
+      break;
   }
-  const html = `<!doctype html><html><body style="margin:0;background:#f6f4f1;font-family:Arial,sans-serif;color:#24211f"><div style="max-width:620px;margin:32px auto;padding:32px;background:#fff;border-radius:12px"><p style="font-size:13px;letter-spacing:2px;font-weight:bold;color:#795b42">GIFTIJ BRANDY</p><h1 style="font-size:24px;margin:24px 0 12px">${escapeHtml(heading)}</h1><p>Hello ${escapeHtml(customer)},</p><p style="line-height:1.65">${escapeHtml(intro)}</p>${extraHtml}${items.html}<p style="margin-top:28px">Thank you for choosing Giftij Brandy.</p><p style="color:#777;font-size:12px">If you need help, please contact our Customer Care team.</p></div></body></html>`;
-  const plain = `GIFTIJ BRANDY\n\n${heading}\n\nHello ${customer},\n\n${intro}\n\n${extraText}${items.plain ? `\nItems:\n${items.plain}\n` : ""}\nThank you for choosing Giftij Brandy.\n`;
+
+  const logo = safeLogoUrl
+    ? `<img src="${escapeHtml(safeLogoUrl)}" width="148" alt="Giftij Brandy" style="display:block;width:148px;max-width:100%;height:auto;border:0;margin:0 auto">`
+    : `<div style="font-family:Georgia,serif;font-size:25px;letter-spacing:1.4px;color:${INK};font-weight:600">GIFTIJ BRANDY</div>`;
+
+  const html = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="x-apple-disable-message-reformatting"><title>${escapeHtml(subject)}</title></head>
+<body style="margin:0;padding:0;background:#f5f4f1;color:${INK};font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f5f4f1;border-collapse:collapse">
+    <tr><td align="center" style="padding:28px 12px">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#fff;border-collapse:separate;border-spacing:0;border:1px solid #ece9e2;border-radius:10px;overflow:hidden">
+        <tr><td align="center" style="padding:28px 24px 22px;background:#fff">
+          ${logo}
+          <div style="height:2px;width:46px;background:${BRAND_GOLD};margin:18px auto 0"></div>
+        </td></tr>
+        <tr><td style="padding:26px 30px 12px">
+          <p style="margin:0 0 10px;color:#9a8359;font-size:10px;letter-spacing:1.8px;font-weight:700;text-transform:uppercase">A note from Giftij Brandy</p>
+          <h1 style="margin:0 0 16px;color:${INK};font-family:Georgia,'Times New Roman',serif;font-size:27px;line-height:1.25;font-weight:600">${escapeHtml(heading)}</h1>
+          <p style="margin:0;color:#514e47;font-size:15px;line-height:1.75">Hello ${escapeHtml(customer)},</p>
+          <p style="margin:12px 0 0;color:#514e47;font-size:15px;line-height:1.75">${escapeHtml(intro)}</p>
+          ${detailHtml}
+          <p style="margin:24px 0 4px;color:#514e47;font-size:14px;line-height:1.7">Thank you for choosing Giftij Brandy. We appreciate your trust in us.</p>
+          <p style="margin:12px 0 0;color:${INK};font-family:Georgia,'Times New Roman',serif;font-size:15px">Warm regards,<br><strong>Giftij Brandy Team</strong></p>
+        </td></tr>
+        ${footerHtml(year)}
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+
+  const plain = `GIFTIJ BRANDY\n\n${heading}\n\nHello ${customer},\n\n${intro}\n\n${detailText}\nThank you for choosing Giftij Brandy. We appreciate your trust in us.\n\nWarm regards,\nGiftij Brandy Team\n\nThis is an automated email address and is not monitored. Please do not reply to this email.\n\nFor enquiries or assistance:\nEmail: ${SUPPORT_EMAIL}\nWhatsApp: ${SUPPORT_WHATSAPP}\n\n© ${year} Giftij Brandy. All rights reserved.\n`;
+
   return { subject, html, text: plain };
 }

@@ -912,7 +912,7 @@ async function handleChargeSuccess(
           "ORDER_CONFIRMED",
           `order-confirmed:${created.id}`,
           created.id,
-          { stockUnavailable },
+          { stockUnavailable, totalPaid: data.amount / 100 },
         );
 
         await tx.customer.update({

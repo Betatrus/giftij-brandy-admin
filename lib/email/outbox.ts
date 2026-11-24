@@ -30,17 +30,19 @@ export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType:
   const order = await tx.order.findUniqueOrThrow({
     where: { id: orderId },
     select: {
-      orderNumber: true, subtotal: true, trackingNumber: true,
+      orderNumber: true, subtotal: true, status: true, createdAt: true, trackingNumber: true,
       customer: { select: { name: true, email: true } },
-      items: { select: { quantity: true, product: { select: { name: true } }, variant: { select: { value: true } } } },
+      items: { select: { quantity: true, unitPrice: true, product: { select: { name: true } }, variant: { select: { value: true } } } },
     },
   });
   await enqueueEmail(tx, {
     eventKey, eventType, recipientEmail: order.customer.email, recipientName: order.customer.name,
     payload: {
       customerName: order.customer.name, orderNumber: order.orderNumber,
-      subtotal: Number(order.subtotal), trackingNumber: order.trackingNumber,
-      items: order.items.map((item) => ({ name: item.product.name, variant: item.variant?.value ?? null, quantity: item.quantity })),
+      orderStatus: order.status === "PENDING" ? "Confirmed — awaiting processing" : order.status,
+      orderDate: order.createdAt.toISOString(),
+      subtotal: Number(order.subtotal), totalPaid: Number(order.subtotal), trackingNumber: order.trackingNumber,
+      items: order.items.map((item) => ({ name: item.product.name, variant: item.variant?.value ?? null, quantity: item.quantity, unitPrice: Number(item.unitPrice) })),
       ...extra,
     } as Prisma.InputJsonValue,
   });
@@ -110,7 +112,7 @@ export async function processEmailOutboxBatch(limit = 10): Promise<{ claimed: nu
       const message = renderTransactionalEmail(job.eventType, job.payload);
       const sent = await sendEmail({
         to: job.recipientEmail, toName: job.recipientName ?? undefined,
-        subject: message.subject, html: message.html, idempotencyKey: brevoIdempotencyKey(job.eventKey),
+        subject: message.subject, html: message.html, text: message.text, idempotencyKey: brevoIdempotencyKey(job.eventKey),
         tags: ["giftij-brandy", job.eventType.toLowerCase()],
       });
       await prisma.emailOutbox.updateMany({
