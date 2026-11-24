@@ -120,13 +120,15 @@ export function renderTransactionalEmail(eventType: EmailEventType, value: unkno
   const summaryCard = (rows: string) => `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background:#fbfaf7;border:1px solid #eeeae2;border-radius:8px;margin:18px 0 22px"><tr><td style="padding:14px 16px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rows}</table></td></tr></table>`;
 
   switch (eventType) {
-    case "CHECKOUT_EXPIRED":
-      subject = "Your Giftij Brandy checkout has expired";
-      heading = "Your checkout session has expired";
-      intro = "It looks like your checkout was not completed within the 10-minute reservation window. The reserved stock has now been released, and no order was created.";
-      detailHtml = reference ? `<p style="margin:0;color:${MUTED};font-size:13px">Payment reference: ${escapeHtml(reference)}</p>` : "";
-      detailText = reference ? `Payment reference: ${reference}\n` : "";
+    case "CHECKOUT_EXPIRED": {
+      const deadline = dateLabel(payload.expiredAt);
+      subject = "Your Giftij Brandy order has been cancelled";
+      heading = "Your order has been cancelled";
+      intro = `Your order has been cancelled because payment was not completed before ${deadline} WAT. The reserved items have now been released and are available for other customers. No order was created, and no payment was recorded as successful.`;
+      detailHtml = `${reference ? `<p style="margin:0 0 8px;color:${MUTED};font-size:13px">Payment reference: ${escapeHtml(reference)}</p>` : ""}`;
+      detailText = `${reference ? `Payment reference: ${reference}\n` : ""}`;
       break;
+    }
     case "PAYMENT_FAILED":
       subject = "Your Giftij Brandy payment was not completed";
       heading = "Your payment was not completed";
