@@ -221,7 +221,7 @@ export function renderTransactionalEmail(eventType: EmailEventType, value: unkno
   </table>
 </body></html>`;
 
-  const plain = `GIFTIJ BRANDY\n\n${heading}\n\nHello ${customer},\n\n${intro}\n\n${detailText}\n${eventType === "ORDER_COMPLETED" ? "" : "Thank you for choosing Giftij Brandy. We appreciate your trust in us.\\n\\n"}Warm regards,\nGiftij Brandy Team\n\nThis is an automated email address and is not monitored. Please do not reply to this email.\n\nFor enquiries or assistance:\nEmail: ${SUPPORT_EMAIL}\nWhatsApp: ${SUPPORT_WHATSAPP}\n\n© ${year} Giftij Brandy. All rights reserved.\n`;
+  const plain = `GIFTIJ BRANDY\n\n${heading}\n\nHello ${customer},\n\n${intro}\n\n${detailText}\n${eventType === "ORDER_COMPLETED" ? "" : "Thank you for choosing Giftij Brandy. We appreciate your trust in us.\n\n"}Warm regards,\nGiftij Brandy Team\n\nThis is an automated email address and is not monitored. Please do not reply to this email.\n\nFor enquiries or assistance:\nEmail: ${SUPPORT_EMAIL}\nWhatsApp: ${SUPPORT_WHATSAPP}\n\n© ${year} Giftij Brandy. All rights reserved.\n`;
 
   return { subject, html, text: plain };
 }
