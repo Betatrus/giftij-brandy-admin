@@ -212,7 +212,7 @@ export function renderTransactionalEmail(eventType: EmailEventType, value: unkno
           <p style="margin:0;color:#514e47;font-size:15px;line-height:1.75">Hello ${escapeHtml(customer)},</p>
           <p style="margin:12px 0 0;color:#514e47;font-size:15px;line-height:1.75">${escapeHtml(intro)}</p>
           ${detailHtml}
-          <p style="margin:24px 0 4px;color:#514e47;font-size:14px;line-height:1.7">Thank you for choosing Giftij Brandy. We appreciate your trust in us.</p>
+          ${eventType === "ORDER_COMPLETED" ? "" : `<p style="margin:24px 0 4px;color:#514e47;font-size:14px;line-height:1.7">Thank you for choosing Giftij Brandy. We appreciate your trust in us.</p>`}
           <p style="margin:12px 0 0;color:${INK};font-family:Georgia,'Times New Roman',serif;font-size:15px">Warm regards,<br><strong>Giftij Brandy Team</strong></p>
         </td></tr>
         ${footerHtml(year)}
