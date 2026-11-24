@@ -18,6 +18,8 @@ fi
 # Apply additive Production schema migrations before compiling the matching app.
 # If a migration fails, stop the build and keep the previous deployment serving traffic.
 if [ "${VERCEL_ENV:-}" = "production" ]; then
+  echo "Reconciling previously-applied Production migrations."
+  node scripts/repair-production-migration-history.cjs
   echo "Applying Prisma migrations to the Production database."
   npx prisma migrate deploy
 fi
