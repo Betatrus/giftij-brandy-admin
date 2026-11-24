@@ -32,7 +32,7 @@ export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType:
     select: {
       orderNumber: true, subtotal: true, status: true, createdAt: true, trackingNumber: true,
       customer: { select: { name: true, email: true } },
-      items: { select: { quantity: true, unitPrice: true, product: { select: { name: true } }, variant: { select: { value: true } } } },
+      items: { select: { quantity: true, unitPrice: true, product: { select: { name: true, slug: true } }, variant: { select: { value: true } } } },
     },
   });
   await enqueueEmail(tx, {
@@ -42,7 +42,7 @@ export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType:
       orderStatus: order.status === "PENDING" ? "Confirmed — awaiting processing" : order.status,
       orderDate: order.createdAt.toISOString(),
       subtotal: Number(order.subtotal), totalPaid: Number(order.subtotal), trackingNumber: order.trackingNumber,
-      items: order.items.map((item) => ({ name: item.product.name, variant: item.variant?.value ?? null, quantity: item.quantity, unitPrice: Number(item.unitPrice) })),
+      items: order.items.map((item) => ({ name: item.product.name, slug: item.product.slug, variant: item.variant?.value ?? null, quantity: item.quantity, unitPrice: Number(item.unitPrice) })),
       ...extra,
     } as Prisma.InputJsonValue,
   });
