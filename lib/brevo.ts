@@ -11,7 +11,7 @@ export async function sendEmail(params: SendEmailInput): Promise<{ messageId: st
     method: "POST",
     headers: { accept: "application/json", "api-key": apiKey, "content-type": "application/json" },
     cache: "no-store",
-    signal: AbortSignal.timeout(8_000),
+    signal: AbortSignal.timeout(6_000),
     body: JSON.stringify({
       sender: { name: senderName, email: senderEmail },
       to: [{ email: params.to, ...(params.toName ? { name: params.toName } : {}) }],

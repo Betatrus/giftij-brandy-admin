@@ -1,9 +1,20 @@
+import { createHash } from "node:crypto";
 import type { EmailEventType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/brevo";
 import { renderTransactionalEmail } from "@/lib/email/templates";
 
 type EnqueueInput = { eventKey: string; eventType: EmailEventType; recipientEmail: string; recipientName?: string | null; payload: Prisma.InputJsonValue };
+
+// Brevo requires a UUID idempotency key. Derive a stable UUID from the
+// business event key so retries of the same outbox item reuse the same key.
+function brevoIdempotencyKey(eventKey: string): string {
+  const bytes = createHash("sha256").update(eventKey).digest();
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.subarray(0, 16).toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
 
 export async function enqueueEmail(tx: Prisma.TransactionClient, input: EnqueueInput): Promise<void> {
   const recipientEmail = input.recipientEmail.trim().toLowerCase();
@@ -95,7 +106,7 @@ export async function processEmailOutboxBatch(limit = 10): Promise<{ claimed: nu
       const message = renderTransactionalEmail(job.eventType, job.payload);
       const sent = await sendEmail({
         to: job.recipientEmail, toName: job.recipientName ?? undefined,
-        subject: message.subject, html: message.html, idempotencyKey: job.eventKey,
+        subject: message.subject, html: message.html, idempotencyKey: brevoIdempotencyKey(job.eventKey),
         tags: ["giftij-brandy", job.eventType.toLowerCase()],
       });
       await prisma.emailOutbox.updateMany({
@@ -104,8 +115,8 @@ export async function processEmailOutboxBatch(limit = 10): Promise<{ claimed: nu
       });
       result.sent += 1;
     } catch (error) {
-      const terminal = job.attempts >= 8;
-      const delayMs = Math.min(60 * 60 * 1000, 30_000 * (2 ** Math.max(0, job.attempts - 1)));
+      const terminal = job.attempts >= 6;
+      const delayMs = Math.min(8 * 60 * 1000, 30_000 * (2 ** Math.max(0, job.attempts - 1)));
       await prisma.emailOutbox.updateMany({
         where: { id: job.id, status: "PROCESSING" },
         data: {
