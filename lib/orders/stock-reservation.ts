@@ -1200,7 +1200,7 @@ async function expireCheckoutReservation(
               variant: line.variantId,
               quantity: line.quantity,
             })),
-            expiredAt: now.toISOString(),
+            expiredAt: reservation.expiresAt.toISOString(),
           } as Prisma.InputJsonValue,
         });
       }
