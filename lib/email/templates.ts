@@ -200,7 +200,6 @@ export function renderTransactionalEmail(eventType: EmailEventType, value: unkno
         </td></tr>
         ${footerHtml(year)}
       </table>
-      <p style="margin:14px 0 0;color:#aaa59b;font-size:10px;line-height:1.5">Giftij Brandy · Thoughtful finds, beautifully chosen.</p>
     </td></tr>
   </table>
 </body></html>`;
