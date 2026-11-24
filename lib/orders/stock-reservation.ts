@@ -4,6 +4,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { CartLine } from "@/lib/orders/stock";
+import { enqueueEmail } from "@/lib/email/outbox";
 
 /**
  * How long an admitted checkout owns its stock while the customer
@@ -405,6 +406,7 @@ export async function reserveStockForCheckout(
   lines: CartLine[],
   offerCampaignId: string | null = null,
   offerSetId: string | null = null,
+  customer: { email: string; name?: string | null } | null = null,
 ): Promise<{
   reservationId: string;
   expiresAt: Date;
@@ -505,6 +507,8 @@ export async function reserveStockForCheckout(
 
               cart:
                 normalized as Prisma.InputJsonValue,
+              customerEmail: customer?.email?.trim().toLowerCase() ?? null,
+              customerName: customer?.name?.trim() || null,
 
               offerCampaignId,
               offerSetId,
