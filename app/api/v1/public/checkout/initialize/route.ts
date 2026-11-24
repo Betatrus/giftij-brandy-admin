@@ -123,6 +123,7 @@ export async function POST(
           resolved,
           campaignIds[0] ?? null,
           offerSetIds[0] ?? null,
+          { email: body.email, name: shippingAddress.fullName },
         );
 
       reservationId =

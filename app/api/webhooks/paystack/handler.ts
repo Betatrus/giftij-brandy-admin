@@ -19,6 +19,7 @@ import {
   consumeCheckoutReservation,
   releaseCheckoutReservationByReference,
 } from "@/lib/orders/stock-reservation";
+import { enqueueOrderEmail, enqueuePaymentFailedEmail } from "@/lib/email/outbox";
 
 export const runtime = "nodejs";
 
@@ -634,6 +635,7 @@ async function handleChargeSuccess(
 
         select: {
           id: true,
+          name: true,
           price: true,
           discount: true,
           costPrice: true,
@@ -905,6 +907,14 @@ async function handleChargeSuccess(
           });
         }
 
+        await enqueueOrderEmail(
+          tx,
+          "ORDER_CONFIRMED",
+          `order-confirmed:${created.id}`,
+          created.id,
+          { stockUnavailable },
+        );
+
         await tx.customer.update({
           where: { id: customer.id },
           data: { lastPurchase: new Date() },
@@ -998,6 +1008,14 @@ async function handleChargeFailed(
     // second safety net for the ten-minute reservation deadline.
     throw releaseError;
   }
+
+  await prisma.$transaction((tx) => enqueuePaymentFailedEmail(tx, {
+    reference: data.reference,
+    email: data.customer?.email?.trim().toLowerCase(),
+    name: [data.customer?.first_name, data.customer?.last_name].filter(Boolean).join(" ").trim() || undefined,
+    amountKobo: data.amount,
+    currency: data.currency ?? "NGN",
+  }));
 
   const email =
     data.customer

@@ -1,0 +1,123 @@
+import type { EmailEventType, Prisma } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { sendEmail } from "@/lib/brevo";
+import { renderTransactionalEmail } from "@/lib/email/templates";
+
+type EnqueueInput = { eventKey: string; eventType: EmailEventType; recipientEmail: string; recipientName?: string | null; payload: Prisma.InputJsonValue };
+
+export async function enqueueEmail(tx: Prisma.TransactionClient, input: EnqueueInput): Promise<void> {
+  const recipientEmail = input.recipientEmail.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) return;
+  await tx.emailOutbox.upsert({
+    where: { eventKey: input.eventKey },
+    create: { eventKey: input.eventKey, eventType: input.eventType, recipientEmail, recipientName: input.recipientName?.trim() || null, payload: input.payload },
+    update: {},
+  });
+}
+
+export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType: EmailEventType, eventKey: string, orderId: string, extra: Record<string, unknown> = {}): Promise<void> {
+  const order = await tx.order.findUniqueOrThrow({
+    where: { id: orderId },
+    select: {
+      orderNumber: true, subtotal: true, trackingNumber: true,
+      customer: { select: { name: true, email: true } },
+      items: { select: { quantity: true, product: { select: { name: true } }, variant: { select: { value: true } } } },
+    },
+  });
+  await enqueueEmail(tx, {
+    eventKey, eventType, recipientEmail: order.customer.email, recipientName: order.customer.name,
+    payload: {
+      customerName: order.customer.name, orderNumber: order.orderNumber,
+      subtotal: Number(order.subtotal), trackingNumber: order.trackingNumber,
+      items: order.items.map((item) => ({ name: item.product.name, variant: item.variant?.value ?? null, quantity: item.quantity })),
+      ...extra,
+    } as Prisma.InputJsonValue,
+  });
+}
+
+export async function enqueuePaymentFailedEmail(tx: Prisma.TransactionClient, input: { reference: string; email?: string; name?: string; amountKobo?: number; currency?: string }): Promise<void> {
+  const reservation = await tx.checkoutReservation.findUnique({
+    where: { paymentReference: input.reference },
+    select: { customerEmail: true, customerName: true, cart: true },
+  });
+  const recipientEmail = input.email?.trim().toLowerCase() || reservation?.customerEmail?.trim().toLowerCase() || "";
+  if (!recipientEmail) return;
+
+  const lines: Array<{ productId: string; variantId: string | null; quantity: number }> = [];
+  if (Array.isArray(reservation?.cart)) for (const raw of reservation.cart) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const line = raw as Record<string, unknown>;
+    if (typeof line.productId === "string" && Number.isSafeInteger(line.quantity) && Number(line.quantity) > 0) {
+      lines.push({ productId: line.productId, variantId: typeof line.variantId === "string" ? line.variantId : null, quantity: Number(line.quantity) });
+    }
+  }
+  const products = lines.length ? await tx.product.findMany({
+    where: { id: { in: [...new Set(lines.map((line) => line.productId))] } }, select: { id: true, name: true },
+  }) : [];
+  const names = new Map(products.map((product) => [product.id, product.name]));
+  const customerName = input.name || reservation?.customerName || "there";
+  await enqueueEmail(tx, {
+    eventKey: `paystack-payment-failed:${input.reference}`, eventType: "PAYMENT_FAILED",
+    recipientEmail, recipientName: customerName,
+    payload: {
+      customerName, reference: input.reference,
+      amountNaira: typeof input.amountKobo === "number" ? input.amountKobo / 100 : null,
+      currency: input.currency || "NGN",
+      items: lines.map((line) => ({ name: names.get(line.productId) || "Giftij Brandy item", variant: line.variantId, quantity: line.quantity })),
+    } as Prisma.InputJsonValue,
+  });
+}
+
+export async function processEmailOutboxBatch(limit = 10): Promise<{ claimed: number; sent: number; retried: number; failed: number }> {
+  const batchSize = Math.max(1, Math.min(Math.trunc(limit) || 10, 10));
+  const jobs = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.$queryRaw<Array<{ id: string }>>`
+      WITH candidates AS (
+        SELECT "id" FROM "EmailOutbox"
+        WHERE ("status" = 'PENDING' AND "availableAt" <= NOW())
+           OR ("status" = 'PROCESSING' AND "lockedAt" <= NOW() - INTERVAL '5 minutes')
+        ORDER BY "createdAt" ASC
+        LIMIT ${batchSize}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "EmailOutbox" AS job
+      SET "status" = 'PROCESSING', "lockedAt" = NOW(),
+          "attempts" = job."attempts" + 1, "updatedAt" = NOW()
+      FROM candidates WHERE job."id" = candidates."id"
+      RETURNING job."id"
+    `;
+    if (!claimed.length) return [];
+    return tx.emailOutbox.findMany({ where: { id: { in: claimed.map((row) => row.id) } }, orderBy: { createdAt: "asc" } });
+  });
+  const result = { claimed: jobs.length, sent: 0, retried: 0, failed: 0 };
+  const deliver = async (job: (typeof jobs)[number]) => {
+    try {
+      const message = renderTransactionalEmail(job.eventType, job.payload);
+      const sent = await sendEmail({
+        to: job.recipientEmail, toName: job.recipientName ?? undefined,
+        subject: message.subject, html: message.html, idempotencyKey: job.eventKey,
+        tags: ["giftij-brandy", job.eventType.toLowerCase()],
+      });
+      await prisma.emailOutbox.updateMany({
+        where: { id: job.id, status: "PROCESSING" },
+        data: { status: "SENT", lockedAt: null, sentAt: new Date(), providerMessageId: sent.messageId, lastError: null },
+      });
+      result.sent += 1;
+    } catch (error) {
+      const terminal = job.attempts >= 8;
+      const delayMs = Math.min(60 * 60 * 1000, 30_000 * (2 ** Math.max(0, job.attempts - 1)));
+      await prisma.emailOutbox.updateMany({
+        where: { id: job.id, status: "PROCESSING" },
+        data: {
+          status: terminal ? "FAILED" : "PENDING", lockedAt: null,
+          availableAt: new Date(Date.now() + delayMs),
+          lastError: (error instanceof Error ? error.message : String(error)).slice(0, 4000),
+        },
+      });
+      if (terminal) result.failed += 1; else result.retried += 1;
+      console.error("Transactional email delivery failed", { eventKey: job.eventKey, eventType: job.eventType, attempt: job.attempts, terminal, error: error instanceof Error ? error.message : String(error) });
+    }
+  };
+  for (let index = 0; index < jobs.length; index += 5) await Promise.all(jobs.slice(index, index + 5).map(deliver));
+  return result;
+}

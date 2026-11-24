@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { enqueueOrderEmail } from "@/lib/email/outbox";
 import {
   hasPermission,
   stripFinancialFields,
@@ -359,6 +360,7 @@ export async function markOrderProcessingOnView(
           metadata: { from: "PENDING", to: "PROCESSING", trigger: "viewed" },
         },
       });
+      await enqueueOrderEmail(tx, "ORDER_PROCESSING", `order-processing:${id}`, id);
 
       return true;
     });
@@ -443,6 +445,7 @@ export async function completeOrder(
         metadata: { from, to: "COMPLETED" },
       },
     });
+    await enqueueOrderEmail(tx, "ORDER_COMPLETED", `order-completed:${id}`, id);
   });
 
   revalidatePath("/admin/orders");
@@ -776,6 +779,9 @@ export async function resolveCancellationReview(
         },
       },
     });
+    if (decision === "APPROVE") {
+      await enqueueOrderEmail(tx, "ORDER_CANCELLED", `order-cancelled:${id}`, id, { reason: cleanReason });
+    }
   });
 
   revalidatePath("/admin/orders");

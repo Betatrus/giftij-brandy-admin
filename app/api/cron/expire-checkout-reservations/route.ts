@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { processEmailOutboxBatch } from "@/lib/email/outbox";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -27,10 +28,12 @@ export async function GET(req: NextRequest) {
     // state transitions make concurrent cleanup and checkout cleanup idempotent.
     const { releaseExpiredCheckoutReservations } = await import("@/lib/orders/stock-reservation");
     const released = await releaseExpiredCheckoutReservations(25);
+    const emails = await processEmailOutboxBatch(10);
 
     return NextResponse.json({
       ok: true,
       released,
+      emails,
     });
   } catch (error) {
     console.error("Checkout reservation cron failed:", error);

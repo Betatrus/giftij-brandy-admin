@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPermission } from "@/lib/permissions";
 import { logActivity } from "@/lib/activity-log";
 import { recordCustomerEvent } from "@/lib/customers/identity";
-import { sendEmail } from "@/lib/resend";
+import { sendEmail } from "@/lib/brevo";
 import { sendCustomerEmailSchema, type SendCustomerEmailInput } from "@/lib/validators/communication";
 import { revalidatePath } from "next/cache";
 
@@ -77,7 +77,7 @@ function toSimpleHtml(text: string): string {
 /**
  * Sends immediately (§42: "Send Now" — no scheduling in this MVP,
  * matching Campaign.status's SCHEDULED value existing in the schema but
- * unused here). One Resend call per recipient (not a single bulk send)
+ * unused here). One Brevo call per recipient (not a single bulk send)
  * so `{{firstName}}` personalization is genuinely per-recipient, and so
  * one bad email address can't fail the whole batch — failures are
  * collected and reported back rather than throwing on the first one.

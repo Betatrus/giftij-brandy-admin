@@ -2,6 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { enqueueEmail } from "@/lib/email/outbox";
 import { canViewFinancials, hasPermission } from "@/lib/permissions";
 
 import {
@@ -379,7 +380,7 @@ export async function completeCustomerRefund(returnId: string) {
     const record = await tx.customerReturn.findUniqueOrThrow({
       where: { id },
       include: {
-        order: { select: { orderNumber: true } },
+        order: { select: { orderNumber: true, customer: { select: { name: true, email: true } } } },
         orderItem: { select: { product: { select: { name: true } } } },
       },
     });
@@ -395,6 +396,19 @@ export async function completeCustomerRefund(returnId: string) {
           refundStatus: "COMPLETED",
           completedBy: session.user.name ?? session.user.email ?? "Admin",
         },
+      },
+    });
+    await enqueueEmail(tx, {
+      eventKey: `customer-refund-completed:${record.id}`,
+      eventType: "ORDER_REFUNDED",
+      recipientEmail: record.order.customer.email,
+      recipientName: record.order.customer.name,
+      payload: {
+        customerName: record.order.customer.name,
+        orderNumber: record.order.orderNumber,
+        productName: record.orderItem.product.name,
+        quantityReturned: record.quantity,
+        refundAmount: record.refundAmount === null ? null : Number(record.refundAmount),
       },
     });
     return record;

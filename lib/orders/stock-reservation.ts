@@ -1110,6 +1110,8 @@ async function expireCheckoutReservation(
               expiresAt: true,
               cart: true,
               paymentReference: true,
+              customerEmail: true,
+              customerName: true,
               offerCampaignId: true,
             },
           },
