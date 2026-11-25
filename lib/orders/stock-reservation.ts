@@ -28,6 +28,16 @@ type ReservationCartLine = {
   productId: string;
   variantId: string | null;
   quantity: number;
+  name?: string;
+};
+
+export type UnavailableCheckoutItem = {
+  productId: string;
+  variantId: string | null;
+  name: string;
+  requested: number;
+  available: number;
+  reason: "OUT_OF_STOCK" | "INSUFFICIENT_STOCK";
 };
 
 export class OfferCampaignUnavailableError extends Error {
@@ -38,10 +48,9 @@ export class OfferCampaignUnavailableError extends Error {
 }
 
 export class StockReservationUnavailableError extends Error {
-  constructor() {
-    super("Stock is not available.");
-    this.name =
-      "StockReservationUnavailableError";
+  constructor(public readonly unavailableItems: UnavailableCheckoutItem[]) {
+    super("One or more items in your cart are no longer available in the requested quantity.");
+    this.name = "StockReservationUnavailableError";
   }
 }
 
@@ -62,7 +71,7 @@ export class StockReservationUnavailableError extends Error {
  * Black variant x3
  */
 function normalizeCartLines(
-  lines: CartLine[],
+  lines: (CartLine & { name?: string })[],
 ): ReservationCartLine[] {
   const grouped =
     new Map<
@@ -90,13 +99,10 @@ function normalizeCartLines(
     }
 
     grouped.set(key, {
-      productId:
-        line.productId,
-
+      productId: line.productId,
       variantId,
-
-      quantity:
-        line.quantity,
+      quantity: line.quantity,
+      name: line.name,
     });
   }
 
@@ -403,7 +409,7 @@ async function reserveLine(
  * That means we never reserve only half of a customer's cart.
  */
 export async function reserveStockForCheckout(
-  lines: CartLine[],
+  lines: (CartLine & { name?: string })[],
   offerCampaignId: string | null = null,
   offerSetId: string | null = null,
   customer: { email: string; name?: string | null } | null = null,
@@ -447,16 +453,52 @@ export async function reserveStockForCheckout(
        * If any line fails, throwing causes PostgreSQL to roll every previous
        * line in this reservation back automatically.
        */
-      for (const line of normalized) {
-        const reserved =
-          await reserveLine(
-            tx,
-            line,
-          );
+      const unavailableItems: UnavailableCheckoutItem[] = [];
 
-        if (!reserved) {
-          throw new StockReservationUnavailableError();
+      for (const line of normalized) {
+        const reserved = await reserveLine(tx, line);
+        if (reserved) continue;
+
+        // The conditional UPDATE is the final concurrency-safe authority.
+        // Read live stock after it fails so the customer sees exact items.
+        // Any earlier successful updates are rolled back when we throw.
+        let available = 0;
+        let name = line.name || "Selected product";
+        if (line.variantId) {
+          const variant = await tx.productVariant.findUnique({
+            where: { id: line.variantId },
+            select: {
+              currentStock: true,
+              value: true,
+              color: true,
+              size: true,
+              product: { select: { name: true } },
+            },
+          });
+          available = variant?.currentStock ?? 0;
+          const option = [variant?.color, variant?.size].filter(Boolean).join(" ") || variant?.value || "";
+          name = [variant?.product.name || name, option].filter(Boolean).join(" ").trim();
+        } else {
+          const [inventory, product] = await Promise.all([
+            tx.inventory.findUnique({ where: { productId: line.productId }, select: { currentStock: true } }),
+            tx.product.findUnique({ where: { id: line.productId }, select: { name: true } }),
+          ]);
+          available = inventory?.currentStock ?? 0;
+          name = product?.name || name;
         }
+
+        unavailableItems.push({
+          productId: line.productId,
+          variantId: line.variantId,
+          name,
+          requested: line.quantity,
+          available,
+          reason: available <= 0 ? "OUT_OF_STOCK" : "INSUFFICIENT_STOCK",
+        });
+      }
+
+      if (unavailableItems.length > 0) {
+        throw new StockReservationUnavailableError(unavailableItems);
       }
 
       if (offerCampaignId) {

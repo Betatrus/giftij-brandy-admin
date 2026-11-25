@@ -137,13 +137,16 @@ export async function POST(
         const customerCareWhatsApp =
           await getCustomerCareWhatsApp();
 
-        throw new ApiError(
-          "OUT_OF_STOCK",
-          "Stock is not available. Contact Customer Care.",
-          {
-            customerCareWhatsApp,
-          },
-        );
+        const unavailableItems = error.unavailableItems;
+        const itemNames = unavailableItems.map((item) => item.name);
+        const message = itemNames.length === 1
+          ? `${itemNames[0]} is no longer available in the requested quantity. Please review the stock update below or contact Customer Care.`
+          : `These items are no longer available in the requested quantities: ${itemNames.join(", ")}. Please review the stock update below or contact Customer Care.`;
+
+        throw new ApiError("OUT_OF_STOCK", message, {
+          customerCareWhatsApp,
+          unavailableItems,
+        });
       }
 
       throw error;
