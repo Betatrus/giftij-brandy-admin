@@ -13,8 +13,10 @@ export function estimatePaystackLocalFeeKobo(productSubtotalKobo: number): numbe
 
   if (feeBeforeGrossUp >= feeCapKobo) return feeCapKobo;
 
+  // Round upward to the next kobo. Math.round(+1) overstates some
+  // amounts by one kobo compared with Paystack's observed checkout totals.
   const grossAmountKobo =
-    Math.round((productSubtotalKobo + flatFeeKobo) / (1 - percentageRate)) + 1;
+    Math.ceil((productSubtotalKobo + flatFeeKobo) / (1 - percentageRate));
 
   return Math.min(Math.max(grossAmountKobo - productSubtotalKobo, 0), feeCapKobo);
 }
