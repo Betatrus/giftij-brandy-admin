@@ -416,6 +416,7 @@ export async function reserveStockForCheckout(
 ): Promise<{
   reservationId: string;
   expiresAt: Date;
+  createdAt: Date;
 }> {
   const normalized =
     normalizeCartLines(lines);
@@ -560,6 +561,7 @@ export async function reserveStockForCheckout(
             select: {
               id: true,
               expiresAt: true,
+              createdAt: true,
             },
           },
         );
@@ -568,8 +570,8 @@ export async function reserveStockForCheckout(
         reservationId:
           reservation.id,
 
-        expiresAt:
-          reservation.expiresAt,
+        expiresAt: reservation.expiresAt,
+        createdAt: reservation.createdAt,
       };
     },
   );

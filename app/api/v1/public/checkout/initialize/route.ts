@@ -20,9 +20,9 @@ export async function POST(
   const origin =
     req.headers.get("origin");
 
-  let reservationId:
-    | string
-    | null = null;
+  let reservationId: string | null = null;
+  let reservationCreatedAt: Date | null = null;
+  let reservationExpiresAt: Date | null = null;
 
   let reservationAttachedToPaystack =
     false;
@@ -126,8 +126,9 @@ export async function POST(
           { email: body.email, name: shippingAddress.fullName },
         );
 
-      reservationId =
-        reservation.reservationId;
+      reservationId = reservation.reservationId;
+      reservationCreatedAt = reservation.createdAt;
+      reservationExpiresAt = reservation.expiresAt;
     } catch (error) {
       if (
         error instanceof
@@ -311,8 +312,42 @@ export async function POST(
       paystackJson.data.reference,
     );
 
-    reservationAttachedToPaystack =
-      true;
+    reservationAttachedToPaystack = true;
+
+    // Queue the reservation email only after Paystack has returned a valid
+    // authorization URL and the payment reference is attached. Email failure
+    // must never invalidate an otherwise valid checkout.
+    try {
+      const [{ prisma }, { enqueueEmail }, { estimatePaystackLocalFeeKobo }] = await Promise.all([
+        import("@/lib/prisma"),
+        import("@/lib/email/outbox"),
+        import("@/lib/paystack/fee-estimate"),
+      ]);
+      const feeEstimateKobo = estimatePaystackLocalFeeKobo(amountKobo);
+      await prisma.$transaction((tx) => enqueueEmail(tx, {
+        eventKey: `checkout-reserved:${reservationId}`,
+        eventType: "CHECKOUT_RESERVED",
+        recipientEmail: body.email,
+        recipientName: shippingAddress.fullName,
+        payload: {
+          customerName: shippingAddress.fullName,
+          reservationReference: reservationId,
+          reservationPlacedAt: reservationCreatedAt?.toISOString() ?? new Date().toISOString(),
+          expiresAt: reservationExpiresAt?.toISOString() ?? "",
+          paymentUrl: paystackJson.data!.authorization_url,
+          subtotal: amountNaira,
+          feeEstimateNaira: feeEstimateKobo / 100,
+          estimatedTotalNaira: (amountKobo + feeEstimateKobo) / 100,
+          items: resolved.map((line) => ({
+            name: line.name,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+          })),
+        },
+      }));
+    } catch (emailError) {
+      console.error("Could not queue checkout reservation email:", emailError);
+    }
 
     return withCors(
       ok({

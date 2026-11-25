@@ -19,6 +19,7 @@ enum CustomerRefundStatus {
 }
 
 enum EmailEventType {
+  CHECKOUT_RESERVED
   CHECKOUT_EXPIRED
   PAYMENT_FAILED
   ORDER_CONFIRMED

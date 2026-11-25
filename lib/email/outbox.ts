@@ -3,6 +3,7 @@ import type { EmailEventType, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/brevo";
 import { renderTransactionalEmail } from "@/lib/email/templates";
+import { estimatePaystackLocalFeeKobo } from "@/lib/paystack/fee-estimate";
 
 type EnqueueInput = { eventKey: string; eventType: EmailEventType; recipientEmail: string; recipientName?: string | null; payload: Prisma.InputJsonValue };
 
@@ -35,10 +36,14 @@ export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType:
       items: { select: { quantity: true, unitPrice: true, product: { select: { name: true, slug: true } }, variant: { select: { value: true } } } },
     },
   });
+  const subtotalKobo = Math.round(Number(order.subtotal) * 100);
+  const feeEstimateKobo = estimatePaystackLocalFeeKobo(subtotalKobo);
   await enqueueEmail(tx, {
     eventKey, eventType, recipientEmail: order.customer.email, recipientName: order.customer.name,
     payload: {
       customerName: order.customer.name, orderNumber: order.orderNumber,
+      feeEstimateNaira: feeEstimateKobo / 100,
+      estimatedTotalNaira: (subtotalKobo + feeEstimateKobo) / 100,
       orderStatus: order.status === "PENDING" ? "Confirmed — awaiting processing" : order.status,
       orderDate: order.createdAt.toISOString(),
       subtotal: Number(order.subtotal), totalPaid: Number(order.subtotal), trackingNumber: order.trackingNumber,
