@@ -87,6 +87,9 @@ export async function createOfferCampaign(formData: FormData): Promise<{ id: str
   if (discountAmount !== null && (!Number.isFinite(discountAmount) || discountAmount <= 0 || products.some((product) => discountAmount >= Number(product.price)))) throw new Error("Fixed discount must be greater than zero and below the selling price of every selected product.");
   const freeDelivery = formData.get("freeDelivery") === "on";
   const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
+  const setLimitRaw = String(formData.get("offerSetMaxQualifyingOrders") ?? "").trim();
+  const offerSetMaxQualifyingOrders = setLimitRaw ? Number(setLimitRaw) : null;
+  if (offerSetMaxQualifyingOrders !== null && (!Number.isInteger(offerSetMaxQualifyingOrders) || offerSetMaxQualifyingOrders < 1)) throw new Error("Offer Set order limit must be a positive whole number.");
   if (discountPercent === null && discountAmount === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit to this Offer Set.");
   const creative = await resolveCampaignCreative(formData);
 
@@ -102,7 +105,7 @@ export async function createOfferCampaign(formData: FormData): Promise<{ id: str
     }});
     const offerSet = await tx.offerSet.create({ data: {
       campaignId: created.id, title: offerTitle, description: String(formData.get("offerDescription") ?? "").trim() || null,
-      maxQualifyingOrders: null, sortOrder: 0,
+      maxQualifyingOrders: offerSetMaxQualifyingOrders, sortOrder: 0,
       products: { create: productIds.map((productId) => ({ productId, discountPercent, discountAmount, freeDelivery, giftDescription })) },
     }});
     await tx.offerCampaign.update({ where: { id: created.id }, data: { activeOfferSetId: offerSet.id } });
