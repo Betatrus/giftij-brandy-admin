@@ -73,16 +73,19 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       }), origin);
     }
     const requestedSetId = req.nextUrl.searchParams.get("set");
-    const selectedSetId = requestedSetId ??
-      (availableSets.some((set) => set.id === campaign.activeOfferSetId)
-        ? campaign.activeOfferSetId
-        : availableSets[0]?.id ?? null);
-    if (!selectedSetId || !availableSets.some((set) => set.id === selectedSetId)) {
+    const selectedSets = requestedSetId
+      ? availableSets.filter((set) => set.id === requestedSetId)
+      : availableSets;
+    if (selectedSets.length === 0) {
       throw new ApiError("NOT_FOUND", "That Offer Set is not available in this campaign.");
     }
 
-    const offerSet = await prisma.offerSet.findFirst({
-      where: { id: selectedSetId, campaignId: campaign.id, isEnabled: true },
+    // A campaign landing page includes every available enabled Offer Set.
+    // Product links retain their own Offer Set ID so checkout applies the
+    // correct offer. An explicit ?set= request remains scoped to one set.
+    const offerSets = await prisma.offerSet.findMany({
+      where: { id: { in: selectedSets.map((set) => set.id) }, campaignId: campaign.id, isEnabled: true },
+      orderBy: { sortOrder: "asc" },
       select: {
         id: true, title: true, description: true,
         maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true,
@@ -95,8 +98,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         },
       },
     });
-    if (!offerSet) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
-    const products = offerSet.products.filter((item) => item.product && item.product.status === "ACTIVE").map((item) => {
+    if (offerSets.length === 0) throw new ApiError("NOT_FOUND", "This offer is no longer available.");
+    const products = offerSets.flatMap((offerSet) => offerSet.products
+      .filter((item) => item.product && item.product.status === "ACTIVE")
+      .map((item) => {
       const basePrice = Number(item.product.price);
       const discountPercent = item.discountPercent === null ? null : Number(item.discountPercent);
       const discountAmount = item.discountAmount === null ? null : Number(item.discountAmount);
@@ -113,6 +118,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       return {
         slug: item.product.slug,
         name: item.product.name,
+        offerSetId: offerSet.id,
         basePrice,
         offerPrice: computePriceAfterDiscount(basePrice, offerDiscount),
         discountPercent,
@@ -122,8 +128,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         image: item.product.images[0]?.url ?? null,
         imageAlt: item.product.images[0]?.altText ?? item.product.name,
       };
-    });
-    if (products.length === 0) throw new ApiError("NOT_FOUND", "This Offer Set has no available products.");
+    })); 
+    if (products.length === 0) throw new ApiError("NOT_FOUND", "These Offer Sets have no available products.");
+    const selectedOfferSet = offerSets.find((set) => set.id === campaign.activeOfferSetId) ?? offerSets[0];
     return withCors(ok({
       campaign: {
         title: campaign.title, slug: campaign.slug, description: campaign.description,
@@ -140,12 +147,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         qualifyingOrdersCount: set.qualifyingOrdersCount,
         reservedQualifyingOrders: set.reservedQualifyingOrders,
       })),
-      offerSet: {
-        id: offerSet.id, title: offerSet.title, description: offerSet.description,
-        maxQualifyingOrders: offerSet.maxQualifyingOrders,
-        qualifyingOrdersCount: offerSet.qualifyingOrdersCount,
-        reservedQualifyingOrders: offerSet.reservedQualifyingOrders,
-      },
+      offerSet: selectedOfferSet ? {
+        id: selectedOfferSet.id, title: selectedOfferSet.title, description: selectedOfferSet.description,
+        maxQualifyingOrders: selectedOfferSet.maxQualifyingOrders,
+        qualifyingOrdersCount: selectedOfferSet.qualifyingOrdersCount,
+        reservedQualifyingOrders: selectedOfferSet.reservedQualifyingOrders,
+      } : null,
       products,
     }), origin);
   } catch (error) {
