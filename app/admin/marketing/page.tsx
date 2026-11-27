@@ -10,10 +10,10 @@ import { DeleteOfferCampaignButton } from "@/components/admin/delete-offer-campa
 
 const money = (value: unknown) => new Intl.NumberFormat("en-NG", { style: "currency", currency: "NGN", maximumFractionDigits: 0 }).format(Number(value ?? 0));
 
-export default async function MarketingPage({ searchParams }: { searchParams: Promise<{ view?: string }> }) {
+export default async function MarketingPage({ searchParams }: { searchParams: Promise<{ view?: string; notice?: string }> }) {
   const session = await auth();
   if (!session?.user) redirect("/login");
-  const { view } = await searchParams;
+  const { view, notice } = await searchParams;
   const campaignView = view === "create" || view === "manage" ? view : null;
   const canManageOffers = ["SUPER_ADMIN", "TECHNICAL_SUPPORT"].includes(session.user.role);
   const campaigns = canManageOffers
@@ -46,6 +46,7 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
   return <div>
     <Breadcrumbs items={[{ label: "Home", href: "/admin/dashboard" }, { label: "Marketing" }]} />
     <div className="mb-7"><h1 className="font-display text-2xl text-ink">Marketing</h1><p className="mt-1 text-sm text-ink/50">Manage editorial content and customer-facing promotions from one place.</p></div>
+    {notice && <div role="status" className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{notice}</div>}
     <div className="grid gap-4 md:grid-cols-2 mb-8">
       <section className="rounded-2xl border border-cream bg-white p-5 shadow-soft">
         <div className="flex items-start justify-between gap-3"><div><p className="text-xs uppercase tracking-wide text-ink/45">Editorial</p><h2 className="mt-1 font-display text-xl text-ink">Blog Management</h2><p className="mt-2 text-sm text-ink/55">Create articles, manage drafts and publish useful content.</p></div><span className="rounded-full bg-cream px-3 py-1 text-xs text-ink/60">{blogCount} articles</span></div>
