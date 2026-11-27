@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
         set.maxQualifyingOrders === null ||
         set.qualifyingOrdersCount + set.reservedQualifyingOrders < set.maxQualifyingOrders
       );
-      return campaignHasCapacity && availableSets.length > 0;
+      return campaignHasCapacity;
     });
 
     if (!active) return withCors(ok(null), origin);

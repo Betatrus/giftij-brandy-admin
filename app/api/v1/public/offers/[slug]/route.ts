@@ -45,10 +45,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
         },
       }), origin);
     }
-    if (!campaign.activeOfferSetId) {
-      throw new ApiError("NOT_FOUND", "This offer is no longer available.");
-    }
-
     const allEnabledSets = await prisma.offerSet.findMany({
       where: { campaignId: campaign.id, isEnabled: true },
       orderBy: { sortOrder: "asc" },
@@ -63,14 +59,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
     );
     if (availableSets.length === 0) {
       return withCors(ok({
-        expired: true,
         campaign: {
-          title: campaign.title,
-          slug: campaign.slug,
-          description: campaign.description,
-          endsAt: campaign.endsAt,
+          title: campaign.title, slug: campaign.slug, description: campaign.description,
+          announcementHtml: campaign.announcementHtml, creativeImageUrl: campaign.creativeImageUrl,
+          ctaText: campaign.ctaText, startsAt: campaign.startsAt, endsAt: campaign.endsAt,
           maxQualifyingOrders: campaign.maxQualifyingOrders,
+          qualifyingOrdersCount: campaign.qualifyingOrdersCount, defaultOfferSetId: null,
         },
+        offerSets: [], offerSet: null, products: [],
       }), origin);
     }
     const requestedSetId = req.nextUrl.searchParams.get("set");
