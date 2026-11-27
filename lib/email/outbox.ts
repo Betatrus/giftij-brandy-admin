@@ -48,6 +48,135 @@ export async function enqueueOrderEmail(tx: Prisma.TransactionClient, eventType:
   });
 }
 
+const CUSTOMER_SERVICE_EMAIL = "jacobsgift3@gmail.com";
+
+/** Keep this estimate identical to the checkout fee estimate. It is display-only
+ * and is never added to the product subtotal sent to Paystack. */
+export function estimatePaystackLocalFeeNaira(subtotalNaira: number): number {
+  const subtotalKobo = Math.round(subtotalNaira * 100);
+  if (!Number.isSafeInteger(subtotalKobo) || subtotalKobo <= 0) return 0;
+  const percentageRate = 0.015;
+  const flatFeeKobo = subtotalKobo >= 250_000 ? 10_000 : 0;
+  const feeCapKobo = 200_000;
+  const feeBeforeGrossUp = subtotalKobo * percentageRate + flatFeeKobo;
+  if (feeBeforeGrossUp > feeCapKobo) return feeCapKobo / 100;
+  const grossAmountKobo = Math.round((subtotalKobo + flatFeeKobo) / (1 - percentageRate)) + 1;
+  return Math.min(Math.max(grossAmountKobo - subtotalKobo, 0), feeCapKobo) / 100;
+}
+
+/** Queue the reservation confirmation in the same transaction that attaches
+ * the Paystack session. This avoids emailing customers for a checkout that
+ * failed before a usable payment session was created. */
+export async function enqueueReservationCreatedEmail(tx: Prisma.TransactionClient, reservationId: string): Promise<void> {
+  const reservation = await tx.checkoutReservation.findUniqueOrThrow({
+    where: { id: reservationId },
+    select: { id: true, createdAt: true, expiresAt: true, customerEmail: true, customerName: true, cart: true },
+  });
+  if (!reservation.customerEmail) return;
+
+  const rawLines = Array.isArray(reservation.cart) ? reservation.cart : [];
+  const lines = rawLines.flatMap((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+    const line = raw as Record<string, unknown>;
+    if (typeof line.productId !== "string" || !Number.isSafeInteger(line.quantity) || Number(line.quantity) <= 0) return [];
+    return [{
+      productId: line.productId,
+      variantId: typeof line.variantId === "string" ? line.variantId : null,
+      quantity: Number(line.quantity),
+      name: typeof line.name === "string" ? line.name : null,
+      unitPrice: typeof line.unitPrice === "number" && Number.isFinite(line.unitPrice) ? line.unitPrice : null,
+    }];
+  });
+  if (!lines.length) return;
+
+  const products = await tx.product.findMany({
+    where: { id: { in: [...new Set(lines.map((line) => line.productId))] } },
+    select: { id: true, name: true, slug: true, price: true },
+  });
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const variants = await tx.productVariant.findMany({
+    where: { id: { in: lines.flatMap((line) => line.variantId ? [line.variantId] : []) } },
+    select: { id: true, value: true },
+  });
+  const variantById = new Map(variants.map((variant) => [variant.id, variant.value]));
+  const items = lines.map((line) => {
+    const product = productById.get(line.productId);
+    return {
+      name: line.name || product?.name || "Giftij Brandy item",
+      slug: product?.slug || "",
+      variant: line.variantId ? variantById.get(line.variantId) || null : null,
+      quantity: line.quantity,
+      unitPrice: line.unitPrice ?? Number(product?.price ?? 0),
+    };
+  });
+  const subtotal = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const estimatedProcessingFee = estimatePaystackLocalFeeNaira(subtotal);
+
+  await enqueueEmail(tx, {
+    eventKey: `reservation-created:${reservation.id}`,
+    eventType: "RESERVATION_CREATED",
+    recipientEmail: reservation.customerEmail,
+    recipientName: reservation.customerName,
+    payload: {
+      customerName: reservation.customerName || "there",
+      reservationReference: reservation.id,
+      placedAt: reservation.createdAt.toISOString(),
+      expiresAt: reservation.expiresAt.toISOString(),
+      subtotal,
+      estimatedProcessingFee,
+      estimatedTotal: subtotal + estimatedProcessingFee,
+      items,
+    } as Prisma.InputJsonValue,
+  });
+}
+
+/** Queue a separate internal alert after the order has been committed. */
+export async function enqueueCustomerServicePaymentReceivedEmail(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  paymentReference: string,
+  totalPaid: number,
+): Promise<void> {
+  const order = await tx.order.findUniqueOrThrow({
+    where: { id: orderId },
+    select: {
+      orderNumber: true, subtotal: true, createdAt: true, shippingAddress: true,
+      customer: { select: { name: true, email: true, phone: true } },
+      items: {
+        select: {
+          quantity: true, unitPrice: true,
+          product: { select: { name: true, slug: true } },
+          variant: { select: { value: true } },
+        },
+      },
+    },
+  });
+  await enqueueEmail(tx, {
+    eventKey: `customer-service-payment-received:${order.id}`,
+    eventType: "CUSTOMER_SERVICE_PAYMENT_RECEIVED",
+    recipientEmail: CUSTOMER_SERVICE_EMAIL,
+    recipientName: "Giftij Brandy Customer Service",
+    payload: {
+      customerName: order.customer.name,
+      customerEmail: order.customer.email,
+      customerPhone: order.customer.phone,
+      orderNumber: order.orderNumber,
+      paymentReference,
+      totalPaid,
+      subtotal: Number(order.subtotal),
+      orderDate: order.createdAt.toISOString(),
+      shippingAddress: order.shippingAddress as Prisma.InputJsonValue,
+      items: order.items.map((item) => ({
+        name: item.product.name,
+        slug: item.product.slug,
+        variant: item.variant?.value ?? null,
+        quantity: item.quantity,
+        unitPrice: Number(item.unitPrice),
+      })),
+    } as Prisma.InputJsonValue,
+  });
+}
+
 export async function enqueuePaymentFailedEmail(tx: Prisma.TransactionClient, input: { reference: string; email?: string; name?: string; amountKobo?: number; currency?: string }): Promise<void> {
   const reservation = await tx.checkoutReservation.findUnique({
     where: { paymentReference: input.reference },

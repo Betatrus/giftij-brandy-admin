@@ -4,7 +4,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { CartLine } from "@/lib/orders/stock";
-import { enqueueEmail } from "@/lib/email/outbox";
+import { enqueueEmail, enqueueReservationCreatedEmail, estimatePaystackLocalFeeNaira } from "@/lib/email/outbox";
 
 /**
  * How long an admitted checkout owns its stock while the customer
@@ -28,6 +28,8 @@ type ReservationCartLine = {
   productId: string;
   variantId: string | null;
   quantity: number;
+  name?: string;
+  unitPrice?: number;
 };
 
 export class OfferCampaignUnavailableError extends Error {
@@ -62,7 +64,7 @@ export class StockReservationUnavailableError extends Error {
  * Black variant x3
  */
 function normalizeCartLines(
-  lines: CartLine[],
+  lines: (CartLine & { name: string; unitPrice: number })[],
 ): ReservationCartLine[] {
   const grouped =
     new Map<
@@ -83,20 +85,19 @@ function normalizeCartLines(
       grouped.get(key);
 
     if (existing) {
-      existing.quantity +=
-        line.quantity;
-
+      if (existing.unitPrice !== line.unitPrice) {
+        throw new Error("Duplicate checkout lines have conflicting price snapshots.");
+      }
+      existing.quantity += line.quantity;
       continue;
     }
 
     grouped.set(key, {
-      productId:
-        line.productId,
-
+      productId: line.productId,
       variantId,
-
-      quantity:
-        line.quantity,
+      quantity: line.quantity,
+      name: line.name,
+      unitPrice: line.unitPrice,
     });
   }
 
@@ -177,16 +178,18 @@ function parseReservationCart(
       );
     }
 
+    const unitPrice = "unitPrice" in raw ? raw.unitPrice : undefined;
+    const name = "name" in raw ? raw.name : undefined;
+    if (unitPrice !== undefined && (typeof unitPrice !== "number" || !Number.isFinite(unitPrice) || unitPrice < 0)) {
+      throw new Error("Checkout reservation contains an invalid price snapshot.");
+    }
+
     result.push({
       productId,
-
-      variantId:
-        variantId as
-          | string
-          | null,
-
-      quantity:
-        Number(quantity),
+      variantId: variantId as string | null,
+      quantity: Number(quantity),
+      ...(typeof name === "string" ? { name } : {}),
+      ...(typeof unitPrice === "number" ? { unitPrice } : {}),
     });
   }
 
@@ -403,7 +406,7 @@ async function reserveLine(
  * That means we never reserve only half of a customer's cart.
  */
 export async function reserveStockForCheckout(
-  lines: CartLine[],
+  lines: (CartLine & { name: string; unitPrice: number })[],
   offerCampaignId: string | null = null,
   offerSetId: string | null = null,
   customer: { email: string; name?: string | null } | null = null,
@@ -542,26 +545,19 @@ export async function attachPaymentReferenceToReservation(
   reservationId: string,
   paymentReference: string,
 ): Promise<void> {
-  const updated =
-    await prisma.checkoutReservation.updateMany(
-      {
-        where: {
-          id: reservationId,
-          status: "ACTIVE",
-          paymentReference: null,
-        },
-
-        data: {
-          paymentReference,
-        },
-      },
-    );
-
-  if (updated.count !== 1) {
-    throw new Error(
-      "Unable to attach Paystack reference to checkout reservation.",
-    );
-  }
+  await prisma.$transaction(async (tx) => {
+    const updated = await tx.checkoutReservation.updateMany({
+      where: { id: reservationId, status: "ACTIVE", paymentReference: null },
+      data: { paymentReference },
+    });
+    if (updated.count !== 1) {
+      throw new Error("Unable to attach Paystack reference to checkout reservation.");
+    }
+    // Queue the customer-facing reservation email atomically with the
+    // Paystack reference attachment. The email itself contains the internal
+    // reservation reference, never the Paystack payment reference.
+    await enqueueReservationCreatedEmail(tx, reservationId);
+  });
 }
 
 /**
@@ -1192,6 +1188,12 @@ async function expireCheckoutReservation(
           select: { id: true, value: true },
         });
         const variantById = new Map(variants.map((variant) => [variant.id, variant.value]));
+        const subtotal = lines.reduce((sum, line) => {
+          const product = productById.get(line.productId);
+          const unitPrice = line.unitPrice ?? (product ? Number(product.price) : 0);
+          return sum + unitPrice * line.quantity;
+        }, 0);
+        const estimatedProcessingFee = estimatePaystackLocalFeeNaira(subtotal);
         await enqueueEmail(tx, {
           eventKey: `checkout-expired:${reservation.id}`,
           eventType: "CHECKOUT_EXPIRED",
@@ -1199,17 +1201,19 @@ async function expireCheckoutReservation(
           recipientName: reservation.customerName,
           payload: {
             customerName: reservation.customerName || "there",
-            reference: reservation.paymentReference,
             items: lines.map((line) => {
               const product = productById.get(line.productId);
               return {
-                name: product?.name || "Giftij Brandy item",
+                name: line.name || product?.name || "Giftij Brandy item",
                 slug: product?.slug || "",
                 variant: line.variantId ? variantById.get(line.variantId) || null : null,
                 quantity: line.quantity,
-                unitPrice: product ? Number(product.price) : null,
+                unitPrice: line.unitPrice ?? (product ? Number(product.price) : null),
               };
             }),
+            subtotal,
+            estimatedProcessingFee,
+            estimatedTotal: subtotal + estimatedProcessingFee,
             expiredAt: reservation.expiresAt.toISOString(),
           } as Prisma.InputJsonValue,
         });

@@ -19,7 +19,7 @@ import {
   consumeCheckoutReservation,
   releaseCheckoutReservationByReference,
 } from "@/lib/orders/stock-reservation";
-import { enqueueOrderEmail, enqueuePaymentFailedEmail } from "@/lib/email/outbox";
+import { enqueueOrderEmail, enqueuePaymentFailedEmail, enqueueCustomerServicePaymentReceivedEmail } from "@/lib/email/outbox";
 
 export const runtime = "nodejs";
 
@@ -913,6 +913,12 @@ async function handleChargeSuccess(
           `order-confirmed:${created.id}`,
           created.id,
           { stockUnavailable, totalPaid: data.amount / 100 },
+        );
+        await enqueueCustomerServicePaymentReceivedEmail(
+          tx,
+          created.id,
+          data.reference,
+          data.amount / 100,
         );
 
         await tx.customer.update({
