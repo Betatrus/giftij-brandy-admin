@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { Breadcrumbs } from "@/components/ui/breadcrumbs";
 import { CopyCampaignUrl } from "@/components/admin/copy-campaign-url";
 import { CampaignCreativeUploader } from "@/components/admin/campaign-creative-uploader";
+import { CampaignBuilder } from "@/components/admin/campaign-builder";
 import { activateOfferSet, createOfferCampaign, createOfferSet, updateOfferCampaign, updateOfferCampaignStatus, updateOfferSet, toggleOfferSetEnabled } from "@/lib/actions/offer-campaigns";
 import { DeleteOfferCampaignButton } from "@/components/admin/delete-offer-campaign-button";
 
@@ -54,27 +55,10 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
       <section className="rounded-2xl border border-cream bg-white p-5 shadow-soft">
         <p className="text-xs uppercase tracking-wide text-ink/45">Promotions</p><h2 className="mt-1 font-display text-xl text-ink">Offer Campaigns</h2><p className="mt-2 text-sm text-ink/55">Create, publish and manage campaigns, Offer Sets, product benefits and order limits.</p>
         <p className="mt-4 text-sm text-ink/70">{canManageOffers ? `${campaigns.length} campaigns` : "Campaign management is available to Super Admin and Technical Support."}</p>
-        {canManageOffers && <div className="mt-4 flex flex-wrap gap-2"><Link href="/admin/marketing?view=create#campaign-workspace" className="rounded-xl bg-gold px-4 py-2.5 text-sm font-medium text-white">Create Campaign</Link><Link href="/admin/marketing?view=manage#campaign-workspace" className="rounded-xl border border-cream px-4 py-2.5 text-sm font-medium text-ink hover:bg-cream/60">Manage Campaigns</Link></div>}
+        {canManageOffers && <div className="mt-4 flex flex-wrap gap-2"><CampaignBuilder products={products} /><Link href="/admin/marketing?view=manage#campaign-workspace" className="rounded-xl border border-cream px-4 py-2.5 text-sm font-medium text-ink hover:bg-cream/60">Manage Campaigns</Link></div>}
       </section>
     </div>
     {canManageOffers ? <>
-      {campaignView === "create" && (
-      <section id="campaign-workspace" className="mb-8 scroll-mt-6 rounded-2xl border border-cream bg-white p-5 shadow-soft">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-display text-lg text-ink">Create an Offer Campaign</h2><p className="mt-1 text-sm text-ink/50">Create the campaign first, then add Offer Sets and choose which set customers see.</p></div><span className="rounded-full bg-cream px-3 py-1 text-xs text-ink/60">New campaign</span></div><p className="mt-1 mb-4 text-sm text-ink/50">Create the campaign first, then add Offer Sets and choose which single set customers see.</p>
-        <form action={createOfferCampaign} className="grid gap-3 md:grid-cols-2">
-          <label className="text-sm text-ink/70">Campaign title<input name="title" required maxLength={120} className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" placeholder="e.g. Festive Gift Offers" /></label>
-          <label className="text-sm text-ink/70">URL slug<input name="slug" maxLength={90} className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" placeholder="festive-gift-offers (optional)" /></label>
-          <label className="text-sm text-ink/70 md:col-span-2">Description<textarea name="description" rows={2} className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" placeholder="Short campaign introduction" /></label>
-          <label className="text-sm text-ink/70 md:col-span-2">Announcement HTML (optional)<textarea name="announcementHtml" rows={6} maxLength={20000} className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5 font-mono text-xs" placeholder="Paste your designed announcement HTML here. Scripts are disabled in the storefront preview." /></label>
-          <CampaignCreativeUploader />
-          <label className="text-sm text-ink/70">Call-to-action text<input name="ctaText" maxLength={40} defaultValue="Shop the offer" className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" /></label>
-          <label className="text-sm text-ink/70">Starts at<input name="startsAt" type="datetime-local" className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" /></label>
-          <label className="text-sm text-ink/70">Ends at<input name="endsAt" type="datetime-local" className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" /></label>
-          <label className="text-sm text-ink/70">Maximum qualifying orders<input name="maxQualifyingOrders" type="number" min="1" step="1" className="mt-1 w-full rounded-xl border border-cream px-3 py-2.5" placeholder="Optional" /></label>
-          <div className="flex items-end"><button className="rounded-xl bg-gold px-5 py-2.5 text-sm font-medium text-white">Create campaign</button></div>
-        </form>
-      </section>
-      )}
       {campaignView === "manage" && (
       <section id="campaign-workspace" className="scroll-mt-6 space-y-4">
         <div><h2 className="font-display text-lg text-ink">Manage Campaigns</h2><p className="mt-1 text-sm text-ink/50">Edit campaign details, manage Offer Sets, control publication or delete eligible campaigns.</p></div>

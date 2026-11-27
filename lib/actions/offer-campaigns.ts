@@ -59,35 +59,58 @@ export async function getCampaignCreativeUploadSignature() {
   return createSignedCampaignUpload();
 }
 
-export async function createOfferCampaign(formData: FormData) {
+export async function createOfferCampaign(formData: FormData): Promise<{ id: string; title: string }> {
   const session = await requireMarketingAccess();
   const title = clean(formData.get("title"), "Campaign title", 120);
   const announcementHtml = String(formData.get("announcementHtml") ?? "").trim();
   if (announcementHtml.length > 20000) throw new Error("Announcement HTML must be 20,000 characters or fewer.");
   const slug = slugify(String(formData.get("slug") || title));
   if (!slug) throw new Error("A valid campaign URL slug is required.");
-  const existing = await prisma.offerCampaign.findUnique({ where: { slug }, select: { id: true } });
-  if (existing) throw new Error("That campaign URL is already in use.");
   const startsAt = optionalDate(formData.get("startsAt"), "Start date");
   const endsAt = optionalDate(formData.get("endsAt"), "End date");
   if (startsAt && endsAt && endsAt <= startsAt) throw new Error("End date must be after the start date.");
   const maxRaw = String(formData.get("maxQualifyingOrders") ?? "").trim();
   const maxQualifyingOrders = maxRaw ? Number(maxRaw) : null;
-  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) {
-    throw new Error("Order limit must be a positive whole number.");
-  }
+  if (maxQualifyingOrders !== null && (!Number.isInteger(maxQualifyingOrders) || maxQualifyingOrders < 1)) throw new Error("Order limit must be a positive whole number.");
+
+  const offerTitle = clean(formData.get("offerSetTitle"), "Offer Set title", 100);
+  const productIds = Array.from(new Set(formData.getAll("productIds").map(String).filter(Boolean)));
+  if (!productIds.length) throw new Error("Search for and select at least one product.");
+  const products = await prisma.product.findMany({ where: { id: { in: productIds }, status: "ACTIVE" }, select: { id: true, price: true } });
+  if (products.length !== productIds.length) throw new Error("One or more selected products are unavailable. Refresh and select active products only.");
+  const discountRaw = String(formData.get("discountPercent") ?? "").trim();
+  const amountRaw = String(formData.get("discountAmount") ?? "").trim();
+  const discountPercent = discountRaw ? Number(discountRaw) : null;
+  const discountAmount = amountRaw ? Number(amountRaw) : null;
+  if (discountPercent !== null && (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent >= 100)) throw new Error("Discount must be greater than 0 and below 100 percent.");
+  if (discountPercent !== null && discountAmount !== null) throw new Error("Choose either a percentage or fixed discount, not both.");
+  if (discountAmount !== null && (!Number.isFinite(discountAmount) || discountAmount <= 0 || products.some((product) => discountAmount >= Number(product.price)))) throw new Error("Fixed discount must be greater than zero and below the selling price of every selected product.");
+  const freeDelivery = formData.get("freeDelivery") === "on";
+  const giftDescription = String(formData.get("giftDescription") ?? "").trim() || null;
+  if (discountPercent === null && discountAmount === null && !freeDelivery && !giftDescription) throw new Error("Add at least one benefit to this Offer Set.");
   const creative = await resolveCampaignCreative(formData);
-  const campaign = await prisma.offerCampaign.create({ data: {
-    title, slug,
-    description: String(formData.get("description") ?? "").trim() || null,
-    announcementHtml: announcementHtml || null,
-    creativeImageUrl: creative.url,
-    creativeImagePublicId: creative.publicId,
-    ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
-    startsAt, endsAt, maxQualifyingOrders,
-  }});
-  await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_CREATED", resource: `OfferCampaign:${campaign.id}`, metadata: { title, slug } });
+
+  const campaign = await prisma.$transaction(async (tx) => {
+    const created = await tx.offerCampaign.create({ data: {
+      title, slug,
+      description: String(formData.get("description") ?? "").trim() || null,
+      announcementHtml: announcementHtml || null,
+      creativeImageUrl: creative.url,
+      creativeImagePublicId: creative.publicId,
+      ctaText: String(formData.get("ctaText") ?? "").trim() || "Shop the offer",
+      startsAt, endsAt, maxQualifyingOrders,
+    }});
+    const offerSet = await tx.offerSet.create({ data: {
+      campaignId: created.id, title: offerTitle, description: String(formData.get("offerDescription") ?? "").trim() || null,
+      maxQualifyingOrders: null, sortOrder: 0,
+      products: { create: productIds.map((productId) => ({ productId, discountPercent, discountAmount, freeDelivery, giftDescription })) },
+    }});
+    await tx.offerCampaign.update({ where: { id: created.id }, data: { activeOfferSetId: offerSet.id } });
+    return created;
+  });
+  await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_CREATED", resource: `OfferCampaign:${campaign.id}`, metadata: { title, slug, initialOfferSet: offerTitle, productCount: productIds.length } });
   revalidatePath("/admin/marketing");
+  return { id: campaign.id, title: campaign.title };
 }
 
 export async function createOfferSet(formData: FormData) {
