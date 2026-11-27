@@ -32,6 +32,19 @@ export async function POST(
     const ip =
       getClientIp(req);
 
+    // Fail closed before parsing carts, reserving inventory, or contacting Paystack.
+    const { prisma } = await import("@/lib/prisma");
+    const storeSettings = await prisma.storeSettings.findUnique({
+      where: { id: "singleton" },
+      select: { checkoutLocked: true, checkoutLockMessage: true },
+    });
+    if (storeSettings?.checkoutLocked) {
+      throw new ApiError(
+        "CHECKOUT_LOCKED",
+        storeSettings.checkoutLockMessage || "Checkout is temporarily unavailable. Please check back soon.",
+      );
+    }
+
     const rateLimit =
       checkRateLimit(
         `public:checkout-init:${ip}`,

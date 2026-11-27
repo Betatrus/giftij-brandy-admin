@@ -54,3 +54,28 @@ export async function updateCustomerCareWhatsApp(rawNumber: string): Promise<voi
 
   revalidatePath("/admin/settings");
 }
+
+
+export async function updateStorefrontCheckoutLock(input: { locked: boolean; message: string }): Promise<void> {
+  await requireSuperAdmin();
+
+  if (typeof input.locked !== "boolean") {
+    throw new Error("Invalid storefront lock setting.");
+  }
+
+  const message = input.message.trim();
+  if (message.length > 1000) {
+    throw new Error("The customer message must be 1,000 characters or fewer.");
+  }
+  if (input.locked && !message) {
+    throw new Error("Add a customer-facing message before locking checkout.");
+  }
+
+  await prisma.storeSettings.upsert({
+    where: { id: "singleton" },
+    update: { checkoutLocked: input.locked, checkoutLockMessage: message || null },
+    create: { id: "singleton", checkoutLocked: input.locked, checkoutLockMessage: message || null },
+  });
+
+  revalidatePath("/admin/settings");
+}

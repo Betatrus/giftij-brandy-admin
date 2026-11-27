@@ -1,4 +1,5 @@
 export const API_ERROR_CODES = [
+  "CHECKOUT_LOCKED",
   "VALIDATION_ERROR",
   "NOT_FOUND",
   "OUT_OF_STOCK",
@@ -13,6 +14,7 @@ export const API_ERROR_CODES = [
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
 
 const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
+  CHECKOUT_LOCKED: 423,
   VALIDATION_ERROR: 400,
   NOT_FOUND: 404,
   OUT_OF_STOCK: 409,

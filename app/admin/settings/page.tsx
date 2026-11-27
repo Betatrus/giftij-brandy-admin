@@ -4,6 +4,7 @@ import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 import { ChangePasswordForm } from "@/components/admin/settings/change-password-form";
 import { CustomerCareWhatsAppForm } from "@/components/admin/settings/customer-care-whatsapp-form";
 import { BlogVisibilityForm } from "@/components/admin/settings/blog-visibility-form";
+import { StorefrontCheckoutLockForm } from "@/components/admin/settings/storefront-checkout-lock-form";
 import { getStoreSettings } from "@/lib/actions/settings";
 
 export default async function SettingsPage() {
@@ -12,6 +13,7 @@ export default async function SettingsPage() {
   const whatsapp = isSuperAdmin ? await getCustomerCareWhatsApp() : null;
   const canManageBlog = session?.user?.role === "SUPER_ADMIN" || session?.user?.role === "TECHNICAL_SUPPORT" || session?.user?.role === "SUPPORT_ADMIN";
   const storeSettings = canManageBlog ? await getStoreSettings() : null;
+  const canManageCheckoutLock = session?.user?.role === "SUPER_ADMIN";
 
   return (
     <div>
@@ -35,6 +37,14 @@ export default async function SettingsPage() {
               Shown to customers when something they want is low or out of stock.
             </p>
             <CustomerCareWhatsAppForm initialNumber={whatsapp} />
+          </section>
+        )}
+
+        {canManageCheckoutLock && storeSettings && (
+          <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
+            <h2 className="font-body text-sm font-medium text-ink mb-2">Storefront checkout lock</h2>
+            <p className="font-body text-xs text-ink/50 mb-4">Customers can continue browsing products and offers, but new reservations and payments are blocked while this switch is on.</p>
+            <StorefrontCheckoutLockForm locked={storeSettings.checkoutLocked} message={storeSettings.checkoutLockMessage ?? ""} />
           </section>
         )}
 

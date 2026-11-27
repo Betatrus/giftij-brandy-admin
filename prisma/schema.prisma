@@ -696,6 +696,10 @@ model StoreSettings {
   blogNavigationVisible Boolean @default(false)
   /// Global safety switch: published posts remain noindex until intentionally enabled.
   blogIndexingEnabled   Boolean @default(false)
+  /// When true, customers may browse but cannot start new checkout/payment sessions.
+  checkoutLocked        Boolean  @default(false)
+  /// Customer-facing explanation shown on the checkout page while checkout is locked.
+  checkoutLockMessage   String?  @db.Text
   updatedAt            DateTime @updatedAt
 }
 
