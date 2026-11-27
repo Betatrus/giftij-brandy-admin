@@ -46,6 +46,15 @@ export async function POST(
       );
     }
 
+    const { prisma } = await import("@/lib/prisma");
+    const storeSettings = await prisma.storeSettings.findUnique({ where: { id: "singleton" }, select: { storefrontLocked: true, storefrontLockMessage: true, storefrontUnlocksAt: true } });
+    if (storeSettings?.storefrontLocked) {
+      const reopening = storeSettings.storefrontUnlocksAt && storeSettings.storefrontUnlocksAt > new Date()
+        ? storeSettings.storefrontUnlocksAt.toISOString()
+        : null;
+      throw new ApiError("STOREFRONT_CLOSED", storeSettings.storefrontLockMessage || "Our online store is temporarily closed. Please check back soon.", { reopeningAt: reopening });
+    }
+
     const body =
       checkoutInitializeSchema.parse(
         await req.json(),

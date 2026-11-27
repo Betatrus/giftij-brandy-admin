@@ -4,6 +4,7 @@ import { getCustomerCareWhatsApp } from "@/lib/config/customer-care";
 import { ChangePasswordForm } from "@/components/admin/settings/change-password-form";
 import { CustomerCareWhatsAppForm } from "@/components/admin/settings/customer-care-whatsapp-form";
 import { BlogVisibilityForm } from "@/components/admin/settings/blog-visibility-form";
+import { StorefrontLockForm } from "@/components/admin/settings/storefront-lock-form";
 import { getStoreSettings } from "@/lib/actions/settings";
 
 export default async function SettingsPage() {
@@ -35,6 +36,14 @@ export default async function SettingsPage() {
               Shown to customers when something they want is low or out of stock.
             </p>
             <CustomerCareWhatsAppForm initialNumber={whatsapp} />
+          </section>
+        )}
+
+        {isSuperAdmin && storeSettings && (
+          <section className="bg-white rounded-2xl shadow-soft p-5 md:p-6">
+            <h2 className="font-body text-sm font-medium text-ink mb-2">Storefront access</h2>
+            <p className="font-body text-xs text-ink/50 mb-4">Temporarily stop new purchases and show customers an editable notice. Existing orders and admin access are not affected.</p>
+            <StorefrontLockForm locked={storeSettings.storefrontLocked} message={storeSettings.storefrontLockMessage ?? ""} unlocksAt={storeSettings.storefrontUnlocksAt?.toISOString() ?? ""} />
           </section>
         )}
 

@@ -697,6 +697,9 @@ model StoreSettings {
   blogNavigationVisible Boolean @default(false)
   /// Global safety switch: published posts remain noindex until intentionally enabled.
   blogIndexingEnabled   Boolean @default(false)
+  storefrontLocked      Boolean  @default(false)
+  storefrontLockMessage String?  @db.Text
+  storefrontUnlocksAt  DateTime?
   updatedAt            DateTime @updatedAt
 }
 

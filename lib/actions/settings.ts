@@ -54,3 +54,18 @@ export async function updateCustomerCareWhatsApp(rawNumber: string): Promise<voi
 
   revalidatePath("/admin/settings");
 }
+
+
+export async function updateStorefrontLock(input: { locked: boolean; message: string; unlocksAt: string | null }): Promise<void> {
+  await requireSuperAdmin();
+  const message = input.message.trim();
+  if (message.length > 1200) throw new Error("The customer message must be 1,200 characters or fewer.");
+  const unlocksAt = input.unlocksAt ? new Date(input.unlocksAt) : null;
+  if (unlocksAt && Number.isNaN(unlocksAt.getTime())) throw new Error("Enter a valid reopening date and time.");
+  await prisma.storeSettings.upsert({
+    where: { id: "singleton" },
+    update: { storefrontLocked: input.locked, storefrontLockMessage: message || null, storefrontUnlocksAt: unlocksAt },
+    create: { id: "singleton", storefrontLocked: input.locked, storefrontLockMessage: message || null, storefrontUnlocksAt: unlocksAt },
+  });
+  revalidatePath("/admin/settings");
+}
