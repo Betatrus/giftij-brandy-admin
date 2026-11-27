@@ -1,4 +1,7 @@
 import { NextRequest } from "next/server";
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 import { ok, fail } from "@/lib/api/respond";
 import { ApiError } from "@/lib/api/api-error";
 import { withCors, corsPreflight } from "@/lib/api/cors";
