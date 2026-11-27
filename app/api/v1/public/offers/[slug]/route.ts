@@ -74,7 +74,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ slug: s
       (availableSets.some((set) => set.id === campaign.activeOfferSetId)
         ? campaign.activeOfferSetId
         : availableSets[0]?.id ?? null);
-    if (!availableSets.some((set) => set.id === selectedSetId)) {
+    if (!selectedSetId || !availableSets.some((set) => set.id === selectedSetId)) {
       throw new ApiError("NOT_FOUND", "That Offer Set is not available in this campaign.");
     }
 
