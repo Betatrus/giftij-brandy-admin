@@ -4,6 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity-log";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { createSignedCampaignUpload, getImageResource, isCampaignMediaCloudinaryId } from "@/lib/cloudinary";
 
 async function requireMarketingAccess() {
@@ -128,6 +129,10 @@ export async function createOfferSet(formData: FormData) {
   revalidatePath("/admin/marketing");
 }
 
+function showMarketingNotice(message: string): never {
+  redirect(`/admin/marketing?view=manage&notice=${encodeURIComponent(message)}#campaign-workspace`);
+}
+
 export async function activateOfferSet(formData: FormData) {
   const session = await requireMarketingAccess();
   const campaignId = clean(formData.get("campaignId"), "Campaign", 80);
@@ -136,7 +141,7 @@ export async function activateOfferSet(formData: FormData) {
     where: { id: offerSetId, campaignId, isEnabled: true },
     select: { id: true, maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true },
   });
-  if (!offerSet) { revalidatePath("/admin/marketing"); return; }
+  if (!offerSet) showMarketingNotice("That Offer Set is turned off. Turn it on before making it the customer-facing set.");
   if (offerSet.maxQualifyingOrders !== null &&
     offerSet.qualifyingOrdersCount + offerSet.reservedQualifyingOrders >= offerSet.maxQualifyingOrders) {
     throw new Error("That Offer Set has reached its order limit. Enable or select another Offer Set.");
@@ -153,6 +158,9 @@ export async function updateOfferCampaignStatus(formData: FormData) {
   if (!["DRAFT", "PUBLISHED", "PAUSED", "ENDED"].includes(status)) throw new Error("Invalid campaign status.");
   const campaign = await prisma.offerCampaign.findUnique({ where: { id }, include: { offerSets: { where: { isEnabled: true }, select: { id: true, maxQualifyingOrders: true, qualifyingOrdersCount: true, reservedQualifyingOrders: true } } } });
   if (!campaign) throw new Error("Campaign not found.");
+  if (status === "PUBLISHED" && campaign.offerSets.length === 0) {
+    showMarketingNotice("This campaign needs at least one enabled Offer Set before it can be published. Turn on an Offer Set, then try again.");
+  }
   await prisma.offerCampaign.update({ where: { id }, data: { status: status as "DRAFT" | "PUBLISHED" | "PAUSED" | "ENDED" } });
   await logActivity({ userId: session.user.id, action: "OFFER_CAMPAIGN_STATUS_UPDATED", resource: `OfferCampaign:${id}`, metadata: { status } });
   revalidatePath("/admin/marketing");
@@ -245,6 +253,7 @@ export async function toggleOfferSetEnabled(formData: FormData) {
   const offerSetId = clean(formData.get("offerSetId"), "Offer Set", 80);
   const enabled = String(formData.get("enabled") ?? "") === "true";
 
+  let blockedMessage: string | null = null;
   await prisma.$transaction(async (tx) => {
     const campaign = await tx.offerCampaign.findUnique({
       where: { id: campaignId },
@@ -256,6 +265,14 @@ export async function toggleOfferSetEnabled(formData: FormData) {
       select: { id: true },
     });
     if (!offerSet) throw new Error("Offer Set not found for this campaign.");
+
+    if (!enabled && campaign.status === "PUBLISHED") {
+      const enabledCount = await tx.offerSet.count({ where: { campaignId, isEnabled: true } });
+      if (enabledCount <= 1) {
+        blockedMessage = "This campaign needs at least one enabled Offer Set while it is published. Pause the campaign first if you want to turn off every Offer Set.";
+        return;
+      }
+    }
 
     await tx.offerSet.update({ where: { id: offerSetId }, data: { isEnabled: enabled } });
     if (!enabled && campaign.activeOfferSetId === offerSetId) {
@@ -272,6 +289,7 @@ export async function toggleOfferSetEnabled(formData: FormData) {
       });
     }
   });
+  if (blockedMessage) showMarketingNotice(blockedMessage);
 
   await logActivity({
     userId: session.user.id,
