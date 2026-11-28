@@ -64,7 +64,7 @@ export class StockReservationUnavailableError extends Error {
  * Black variant x3
  */
 function normalizeCartLines(
-  lines: (CartLine & { name: string; unitPrice: number })[],
+  lines: (CartLine & { name?: string; unitPrice?: number })[],
 ): ReservationCartLine[] {
   const grouped =
     new Map<
