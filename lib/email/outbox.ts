@@ -140,7 +140,7 @@ export async function enqueueCustomerServicePaymentReceivedEmail(
   const order = await tx.order.findUniqueOrThrow({
     where: { id: orderId },
     select: {
-      orderNumber: true, subtotal: true, createdAt: true, shippingAddress: true,
+      id: true, orderNumber: true, subtotal: true, createdAt: true, shippingAddress: true,
       customer: { select: { name: true, email: true, phone: true } },
       items: {
         select: {
