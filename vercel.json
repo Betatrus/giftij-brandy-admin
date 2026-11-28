@@ -1,10 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "sh scripts/vercel-build.sh",
-  "crons": [
-    {
-      "path": "/api/cron/expire-checkout-reservations",
-      "schedule": "* * * * *"
-    }
-  ]
+  "buildCommand": "sh scripts/vercel-build.sh"
 }
