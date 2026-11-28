@@ -406,7 +406,7 @@ async function reserveLine(
  * That means we never reserve only half of a customer's cart.
  */
 export async function reserveStockForCheckout(
-  lines: (CartLine & { name: string; unitPrice: number })[],
+  lines: (CartLine & { name?: string; unitPrice?: number })[],
   offerCampaignId: string | null = null,
   offerSetId: string | null = null,
   customer: { email: string; name?: string | null } | null = null,
